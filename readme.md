@@ -8,7 +8,7 @@
 
 ---
 
-![Logo](Logo.png)
+![Logo](logo.png)
 
 ---
 
