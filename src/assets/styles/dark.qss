@@ -1,0 +1,506 @@
+/* Dark Theme for wyrtensi proxier */
+
+/* === Base === */
+QMainWindow#MainWindow,
+QWidget#RulesPage,
+QWidget#ProxiesPage,
+QWidget#SettingsPage,
+QStackedWidget#MainContentArea, /* Ensure stack background matches */
+QWidget /* Default fallback background */
+{
+    background-color: #1e1e2f; /* Dark background */
+    color: #e0e0e0; /* Default light text */
+    border: none; /* Remove default borders */
+}
+
+/* === Sidebar === */
+QFrame#SidebarFrame {
+    background-color: #27293d; /* Slightly lighter sidebar */
+    border-right: 1px solid #3a3c54; /* Subtle border */
+}
+
+/* Toggle Button */
+QToolButton#ToggleProxyButton {
+    background-color: transparent;
+    border: 1px solid #4a4e69;
+    padding: 5px;
+    border-radius: 6px;
+    min-width: 40px;
+    min-height: 40px;
+}
+QToolButton#ToggleProxyButton:hover {
+    background-color: #4a4e69;
+    border-color: #5a5e7a;
+}
+QToolButton#ToggleProxyButton:checked {
+    background-color: #5a7a5e;
+    border-color: #6a8a6e;
+}
+QToolButton#ToggleProxyButton:checked:hover {
+    background-color: #6a8a6e;
+}
+
+/* === Navigation Buttons (Sidebar SVG) === */
+QPushButton#navButtonRules,
+QPushButton#navButtonProxies,
+QPushButton#navButtonSettings {
+    background-color: transparent;
+    border: none;
+    border-radius: 8px;
+    padding: 5px;
+}
+QPushButton#navButtonRules:hover,
+QPushButton#navButtonProxies:hover,
+QPushButton#navButtonSettings:hover {
+    background-color: #4a4e69;
+}
+QPushButton#navButtonRules:checked,
+QPushButton#navButtonProxies:checked,
+QPushButton#navButtonSettings:checked {
+    background-color: #6a6e9a;
+    border-left: 3px solid #8a8ee0;
+}
+
+/* === General Widgets === */
+QLabel {
+    color: #e0e0e0;
+    font-size: 16px;
+    background-color: transparent;
+}
+
+QPushButton { /* General Button Style (e.g., Add Proxy/Rule) */
+    background-color: #4a4e69;
+    color: #e0e0e0;
+    border: none;
+    border-radius: 5px;
+    padding: 8px 15px; /* Slightly more padding */
+    font-size: 14px;
+    font-weight: bold;
+    min-height: 20px; /* Ensure min height */
+}
+QPushButton:hover {
+    background-color: #5a5e7a;
+}
+QPushButton:pressed {
+    background-color: #3a3c54;
+}
+QPushButton:disabled {
+    background-color: #3a3c54;
+    color: #777;
+}
+
+/* Input fields (basic) */
+QLineEdit, QTextEdit, QSpinBox {
+    background-color: #27293d;
+    color: #e0e0e0;
+    border: 1px solid #3a3c54;
+    border-radius: 4px;
+    padding: 5px;
+    font-size: 14px;
+}
+QLineEdit:focus, QTextEdit:focus, QSpinBox:focus {
+    border-color: #8a8ee0; /* Highlight on focus */
+}
+QTextEdit { /* Specific styling for multiline edit */
+     min-height: 60px;
+}
+
+/* === Status Bar === */
+QStatusBar#StatusBar {
+    background-color: #27293d;
+    color: #c0c0c0;
+}
+QStatusBar#StatusBar::item {
+    border: none;
+}
+/* Status Bar Label */
+QStatusBar#StatusBar > QLabel {
+    color: #c0c0c0; /* Match status bar text color */
+    padding-left: 5px;
+}
+
+/* === Menu === */
+QMenu {
+    background-color: #27293d;
+    color: #e0e0e0;
+    border: 1px solid #3a3c54;
+    border-radius: 4px;
+    padding: 4px; /* Padding around the whole menu */
+}
+QMenu::item {
+    padding: 5px 20px 5px 20px;
+    border-radius: 3px; /* Round menu item highlight */
+}
+QMenu::item:selected {
+    background-color: #4a4e69;
+}
+QMenu::separator {
+    height: 1px;
+    background-color: #3a3c54;
+    margin: 4px 10px; /* Spacing around separator */
+}
+
+/* === Scroll Area === */
+QScrollArea {
+    background-color: transparent; /* Match page background */
+    border: none;
+}
+QScrollBar:vertical {
+    border: none;
+    background: #27293d; /* Scrollbar track color */
+    width: 8px; /* Width of the scrollbar */
+    margin: 0px 0px 0px 0px;
+}
+QScrollBar::handle:vertical {
+    background: #4a4e69; /* Scrollbar handle color */
+    min-height: 20px; /* Minimum handle height */
+    border-radius: 4px; /* Rounded handle */
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    border: none; /* Hide arrow buttons */
+    background: none;
+    height: 0px;
+    subcontrol-position: top;
+    subcontrol-origin: margin;
+}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+    background: none; /* Hide page area */
+}
+
+/* === Proxy/Rule Page Specific === */
+QScrollArea#ProxyScrollArea, QScrollArea#RuleScrollArea {
+    /* Inherits general scroll area style */
+}
+
+/* === Rule List Item === */
+QFrame#RuleItemWidget { /* Changed from RuleItemFrame */
+    background-color: #2b2d42;
+    border-radius: 8px; /* Slightly rounder */
+    border: 1px solid #3a3c5a; /* Slightly lighter border */
+    margin-bottom: 6px; /* Spacing */
+    padding: 5px; /* Internal padding */
+}
+QFrame#RuleItemWidget:hover {
+    background-color: #35374e;
+    border: 1px solid #5a5e8a;
+}
+
+/* Style based on dynamic property 'ruleEnabled' */
+QFrame#RuleItemWidget[ruleEnabled="false"] {
+    background-color: #252738; /* Dimmer */
+    border: 1px solid #30324a;
+}
+QFrame#RuleItemWidget[ruleEnabled="false"] QLabel { /* Dim all labels */
+    color: #6a6e9a;
+}
+QFrame#RuleItemWidget[ruleEnabled="false"] QPushButton { /* Dim buttons */
+    opacity: 0.6;
+}
+
+/* Domain Label */
+QLabel#RuleDomainLabel {
+    font-size: 15px; /* Slightly larger */
+    font-weight: bold;
+    color: #edf2f4;
+    background-color: transparent; /* Keep transparent */
+    border: none;
+}
+
+/* Proxy Info Label */
+QLabel#RuleProxyLabel { /* Updated object name */
+    font-size: 12px;
+    color: #adb5bd;
+    background-color: transparent;
+    border: none;
+}
+
+/* Profile Info Label */
+QLabel#RuleItemProfileLabel { /* Updated object name */
+    font-size: 11px;
+    color: #8d99ae; /* Slightly different secondary color */
+    font-style: italic; /* Italic as per widget code */
+    background-color: transparent;
+    border: none;
+}
+
+/* Rule Enable Checkbox */
+QCheckBox#RuleEnableCheckbox {
+    spacing: 8px;
+    /* margin-right: 5px; */ /* Optional: Add back if needed */
+}
+/* --- Restore Indicator Styles --- */
+QCheckBox#RuleEnableCheckbox::indicator {
+    width: 16px;
+    height: 16px;
+    border-radius: 3px;
+    border: 1px solid #4a4e69; /* Base border */
+    background-color: #27293d; /* Base background */
+}
+QCheckBox#RuleEnableCheckbox::indicator:unchecked:hover {
+    border: 1px solid #5a5e7a; /* Hover border */
+    background-color: #3a3c54; /* Hover background */
+}
+QCheckBox#RuleEnableCheckbox::indicator:checked {
+    border: 2px solid #8a8ee0; /* Thicker/brighter border */
+    background-color: #8a8ee0; /* Fill with border color */
+    /* Ensure no image property */
+}
+QCheckBox#RuleEnableCheckbox::indicator:checked:hover {
+    border: 2px solid #9a9ee0; /* Brighter hover border */
+    background-color: #9a9ee0; /* Fill with hover border color */
+    /* Ensure no image property */
+}
+/* --- Restore Disabled Indicator Styles --- */
+QFrame#RuleItemWidget[ruleEnabled="false"] QCheckBox#RuleEnableCheckbox::indicator {
+    border-color: #3a3c54;
+    background-color: #252738;
+    opacity: 0.6;
+}
+QFrame#RuleItemWidget[ruleEnabled="false"] QCheckBox#RuleEnableCheckbox::indicator:checked {
+    border-color: #5a5e7a; /* Dimmer checked border */
+    background-color: #5a5e7a; /* Fill with dimmer border color */
+    opacity: 0.6; /* Ensure opacity is applied */
+}
+
+/* Style for when the whole RuleItemWidget is disabled */
+QFrame#RuleItemWidget[ruleEnabled="false"] {
+    background-color: #252738; /* Dimmer */
+    border: 1px solid #30324a;
+}
+QFrame#RuleItemWidget[ruleEnabled="false"] QLabel { /* Dim all labels */
+    color: #6a6e9a;
+}
+QFrame#RuleItemWidget[ruleEnabled="false"] QPushButton { /* Dim buttons */
+    opacity: 0.6;
+}
+
+/* Rule Edit/Delete Buttons (ensure names match widget) */
+QPushButton#EditRuleButton, QPushButton#DeleteRuleButton {
+    background-color: transparent;
+    border: none;
+    border-radius: 14px; padding: 0px;
+    min-width: 28px; max-width: 28px; min-height: 28px; max-height: 28px;
+    icon-size: 18px;
+}
+QPushButton#EditRuleButton:hover {
+    background-color: #4a4e69;
+}
+QPushButton#DeleteRuleButton:hover {
+    background-color: #8c3a3a;
+}
+
+/* Add other styles (Scrollbars, etc.) as needed */
+QScrollArea#RuleScrollArea {
+    /* Styles for the scroll area itself */
+    border: none;
+}
+QWidget#RuleListContainer {
+    /* Style the container inside the scroll area if needed */
+    background-color: transparent; /* Match window background */
+}
+
+/* Ensure filter bar looks consistent */
+QLineEdit {
+    /* General QLineEdit styles */
+    /* ... */
+}
+QWidget QLineEdit { /* Filter input specifically */
+    /* Styles previously defined */
+    border-radius: 15px;
+    padding: 5px 15px;
+    border: 1px solid #4a4e69;
+    background-color: #2b2d42;
+    color: #edf2f4;
+}
+QWidget QLineEdit:focus {
+    border: 1px solid #80a4ff;
+}
+
+/* Proxy/Rule Item */
+QFrame#ProxyItemFrame, QFrame#RuleItemFrame {
+    background-color: #2c2f48; /* Slightly different background for item */
+    border-radius: 6px;
+    border: 1px solid #3a3c54;
+    padding: 8px; /* Internal padding */
+}
+QFrame#ProxyItemFrame:hover, QFrame#RuleItemFrame:hover {
+    background-color: #3a3d58;
+    border-color: #5a5e7a;
+}
+QLabel#ProxyNameLabel, QLabel#RuleDomainLabel {
+    font-size: 15px;
+    font-weight: bold;
+    color: #e8e8ff; /* Slightly brighter name */
+}
+QLabel#ProxyDetailsLabel, QLabel#RuleProxyLabel {
+    font-size: 12px;
+    color: #a0a0c0; /* Muted color */
+}
+
+/* Item Edit/Delete Buttons */
+QPushButton#EditProxyButton, QPushButton#DeleteProxyButton,
+QPushButton#EditRuleButton, QPushButton#DeleteRuleButton,
+QPushButton#TestProxyButton {
+    background-color: transparent;
+    border: none;
+    border-radius: 14px; padding: 0px;
+    min-width: 28px; max-width: 28px; min-height: 28px; max-height: 28px;
+    icon-size: 16px;
+}
+QPushButton#EditProxyButton:hover, QPushButton#EditRuleButton:hover,
+QPushButton#TestProxyButton:hover {
+    background-color: #4a4e69;
+}
+QPushButton#DeleteProxyButton:hover, QPushButton#DeleteRuleButton:hover {
+    background-color: #8c3a3a;
+}
+
+/* Proxy/Rule Editor */
+QFrame#ProxyEditFrame, QFrame#RuleEditFrame {
+    background-color: #27293d; /* Match sidebar */
+    border-bottom: 1px solid #3a3c54;
+}
+QFrame#ProxyEditFrame QLabel, QFrame#RuleEditFrame QLabel {
+     font-size: 14px; /* Smaller labels in editor */
+}
+
+/* Specific Save/Cancel Buttons in Editors */
+QFrame#ProxyEditFrame QPushButton#SaveButton, QFrame#RuleEditFrame QPushButton#SaveButton {
+    background-color: #5a7a5e; /* Greenish for save */
+    color: #fff;
+}
+QFrame#ProxyEditFrame QPushButton#SaveButton:hover, QFrame#RuleEditFrame QPushButton#SaveButton:hover {
+    background-color: #6a8a6e;
+}
+QFrame#ProxyEditFrame QPushButton#CancelButton, QFrame#RuleEditFrame QPushButton#CancelButton {
+     background-color: #6c757d; /* Grayish for cancel */
+     color: #fff;
+}
+QFrame#ProxyEditFrame QPushButton#CancelButton:hover, QFrame#RuleEditFrame QPushButton#CancelButton:hover {
+     background-color: #8c959d;
+}
+
+/* ComboBox Styling */
+QComboBox {
+    background-color: #27293d;
+    color: #e0e0e0;
+    border: 1px solid #3a3c54;
+    border-radius: 4px;
+    padding: 5px 8px; /* Padding inside combo box */
+    min-width: 6em; /* Ensure minimum size */
+    min-height: 1.5em; /* Ensure reasonable height */
+}
+QComboBox:hover {
+     border-color: #5a5e7a;
+}
+QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 20px; /* Width of the dropdown arrow area */
+    border-left-width: 1px;
+    border-left-color: #3a3c54;
+    border-left-style: solid;
+    border-top-right-radius: 3px;
+    border-bottom-right-radius: 3px;
+}
+QComboBox::down-arrow {
+     /* Using a character for simplicity, replace with SVG if preferred */
+     /* image: url(path/to/dark-chevron-down.svg); */
+     /* For character: Use font properties if needed */
+}
+QComboBox QAbstractItemView { /* The popup list */
+    background-color: #27293d;
+    color: #e0e0e0;
+    border: 1px solid #5a5e7a; /* Slightly lighter border for popup */
+    selection-background-color: #4a4e69;
+    padding: 4px;
+    border-radius: 3px;
+    outline: 0px; /* Remove focus outline */
+}
+
+/* Settings Page specific */
+QLabel#VersionLabel {
+    font-size: 11px;
+    color: #888;
+    padding-top: 10px; /* Space above version label */
+}
+
+/* === Settings Page Checkboxes === */
+QCheckBox#CloseToTrayCheckbox,
+QCheckBox#StartEngineCheckbox {
+    spacing: 8px; /* Consistent spacing */
+    /* Add any other base QCheckBox styling if needed */
+}
+
+QCheckBox#CloseToTrayCheckbox::indicator,
+QCheckBox#StartEngineCheckbox::indicator {
+    width: 16px;
+    height: 16px;
+    border-radius: 3px;
+    border: 1px solid #4a4e69; /* Base border */
+    background-color: #27293d; /* Base background */
+}
+
+QCheckBox#CloseToTrayCheckbox::indicator:unchecked:hover,
+QCheckBox#StartEngineCheckbox::indicator:unchecked:hover {
+    border: 1px solid #5a5e7a; /* Hover border */
+    background-color: #3a3c54; /* Hover background */
+}
+
+QCheckBox#CloseToTrayCheckbox::indicator:checked,
+QCheckBox#StartEngineCheckbox::indicator:checked {
+    border: 2px solid #8a8ee0; /* Thicker/brighter border */
+    background-color: #8a8ee0; /* Fill with border color */
+}
+
+QCheckBox#CloseToTrayCheckbox::indicator:checked:hover,
+QCheckBox#StartEngineCheckbox::indicator:checked:hover {
+    border: 2px solid #9a9ee0; /* Brighter hover border */
+    background-color: #9a9ee0; /* Fill with hover border color */
+}
+
+/* Optional: Disabled state (if they can be disabled) */
+/*
+QCheckBox#CloseToTrayCheckbox:disabled::indicator,
+QCheckBox#StartEngineCheckbox:disabled::indicator {
+    border-color: #3a3c54;
+    background-color: #252738;
+    opacity: 0.6;
+}
+QCheckBox#CloseToTrayCheckbox:disabled::indicator:checked,
+QCheckBox#StartEngineCheckbox:disabled::indicator:checked {
+    background-color: #5a5e7a;
+}
+*/
+
+/* Clear Hotkey Buttons */
+QToolButton#ClearHotkeyButton {
+    background-color: #4a4e69;
+    color: #adb5bd; /* Muted color for clear text/icon */
+    border: none;
+    border-radius: 3px;
+    padding: 2px 5px;
+    margin-left: 5px; /* Space from key sequence edit */
+}
+QToolButton#ClearHotkeyButton:hover {
+    background-color: #5a5e7a;
+    color: #e0e0e0;
+}
+/* Add Profile/Rename/Delete Buttons */
+QPushButton#AddProfileButton, QPushButton#RenameProfileButton, QPushButton#DeleteProfileButton {
+    /* Inherits general QPushButton style, color might need adjustment if they get icons */
+    /* color: #e0e0e0; */
+}
+QPushButton#DeleteProfileButton { /* Specific style for delete profile */
+     background-color: #8c3a3a; /* Match item delete */
+}
+QPushButton#DeleteProfileButton:hover {
+     background-color: #a04b4b;
+}
+
+/* Add Auth Indicator Styling */
+QLabel#AuthIndicatorLabel {
+    background-color: transparent;
+    padding-left: 5px; /* Add some space */
+}
+
