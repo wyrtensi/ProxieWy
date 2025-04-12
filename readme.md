@@ -21,10 +21,10 @@
     *   Built-in support for **authenticated proxies** (username/password).
     *   **Test proxy connectivity** with a single click to ensure they are working.
 *   **🚦 Rule-Based Routing:**
-    *   Define granular rules to forward traffic for specific **domains** (e.g., `example.com`) or **wildcard patterns** (e.g., `*.example.net`) or **IP address** (e.g., `1.1.1.1`).
+    *   Define granular rules to forward traffic for specific **domains** (e.g., `example.com`) or **wildcard patterns** (e.g., `*.example.net`) or **IP addresses** (e.g., `1.1.1.1`).
     *   Route matched traffic through a **chosen proxy** or allow **direct connection**.
     *   Quickly **enable or disable** individual rules without deleting them.
-    *   **(New!)** Quickly add a rule based on **currently selected text** (attempts to copy from focused application) or clipboard content via a **global hotkey**.
+    *   Quickly add a rule based on **currently selected text** (attempts to copy from focused application) or clipboard content via a **global hotkey**.
 *   **🎭 Profiles:**
     *   Organize rules into distinct **profiles** (e.g., "Work VPN", "Home Streaming", "Development").
     *   **Switch active profiles** effortlessly via the UI or global hotkeys.
@@ -43,6 +43,7 @@
     *   Modern and intuitive UI built with **PySide6**.
     *   Choose between **Dark** and **Light** visual themes.
     *   Integrated **filtering** for quickly finding specific proxies or rules.
+    *   Dedicated **Logs view** to see console output directly within the application.
 *   **⚙️ Core Engine:**
     *   Lightweight local proxy server listens for connections (default: `127.0.0.1:8080`).
     *   Intelligently handles `CONNECT` requests (for HTTPS/SOCKS tunnels) and standard HTTP requests based on your defined rules.
@@ -59,7 +60,7 @@
 
 1.  **Clone the Repository:**
     ```bash
-    git clone https://github.com/wyrtensi/ProxieWy.git 
+    git clone https://github.com/wyrtensi/ProxieWy.git
     cd ProxieWy
     ```
 
@@ -121,7 +122,7 @@ The application will start, typically minimized to the system tray. Click the tr
 
 ## 🌱 Future Ideas (Potential Enhancements)
 
-*   [ ] In-app Logs menu
+*   [x] In-app Logs menu
 *   [ ] Add import/export functionality for proxies and rules.
 *   [ ] Visual traffic monitoring/logging within the UI.
 *   [ ] Cross-platform system proxy configuration (macOS, Linux).
