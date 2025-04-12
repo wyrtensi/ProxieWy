@@ -19,7 +19,7 @@
     *   Built-in support for **authenticated proxies** (username/password).
     *   **Test proxy connectivity** with a single click to ensure they are working.
 *   **🚦 Rule-Based Routing:**
-    *   Define granular rules to forward traffic for specific **domains** (e.g., `example.com`) or **wildcard patterns** (e.g., `*.example.net`) or **IP adress** (e.g., `1.1.1.1`).
+    *   Define granular rules to forward traffic for specific **domains** (e.g., `example.com`) or **wildcard patterns** (e.g., `*.example.net`) or **IP address** (e.g., `1.1.1.1`).
     *   Route matched traffic through a **chosen proxy** or allow **direct connection**.
     *   Quickly **enable or disable** individual rules without deleting them.
     *   **(New!)** Quickly add a rule based on **currently selected text** (attempts to copy from focused application) or clipboard content via a **global hotkey**.
