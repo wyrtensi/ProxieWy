@@ -121,6 +121,7 @@ The application will start, typically minimized to the system tray. Click the tr
 
 ## 🌱 Future Ideas (Potential Enhancements)
 
+*   [ ] In-app Logs menu
 *   [ ] Add import/export functionality for proxies and rules.
 *   [ ] Visual traffic monitoring/logging within the UI.
 *   [ ] Cross-platform system proxy configuration (macOS, Linux).
