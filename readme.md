@@ -123,7 +123,7 @@ The application will start, typically minimized to the system tray. Click the tr
 *   [ ] Visual traffic monitoring/logging within the UI.
 *   [ ] Cross-platform system proxy configuration (macOS, Linux).
 *   [x] Packaging for easier distribution (pyinstaller --onefile --noconsole --icon=icon.ico --version-file version.txt --add-data "src/assets/;src/assets/" main.py).
-*   [xSS] Fast adding selected urls to the proxy rules via hotkey.
+*   [x] Fast adding selected urls to the proxy rules via hotkey.
 
 Please ensure your code adheres to basic style guidelines and includes appropriate documentation or tests where necessary.
 
