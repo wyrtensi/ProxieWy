@@ -4,6 +4,8 @@
 [![Qt Version](https://img.shields.io/badge/Qt%20for%20Python-PySide6-green.svg)](https://www.qt.io/qt-for-python)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+> Not tested on Linux/MacOS
+
 **ProxieWy** is a versatile desktop application designed to simplify the management of multiple proxy servers and intelligently route your network traffic. Define custom rules based on domain names and assign them to different profiles for seamless switching between network configurations. Built with Python and the modern PySide6 (Qt) framework.
 
 ---
