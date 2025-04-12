@@ -7,9 +7,9 @@ import winreg # Added import for Windows registry access
 import ctypes # Added import for ctypes
 from ctypes import wintypes # Added import for ctypes
 import re
-from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QAction, QKeySequence, QShortcut, QActionGroup # Added QPainter, QKeySequence
+from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QAction, QKeySequence, QShortcut, QActionGroup, QTextCursor # Added QPainter, QKeySequence, QTextCursor
 from PySide6.QtCore import (Qt, QSize, QSettings, QByteArray, QFile, QTextStream, Signal, QTimer, QPropertyAnimation, QEasingCurve, QParallelAnimationGroup, QStandardPaths,
-                           QRect, QPoint, QEvent, QAbstractAnimation) # Added QSize
+                           QRect, QPoint, QEvent, QAbstractAnimation, QObject) # Added QSize
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QStackedWidget, QSizePolicy, QSystemTrayIcon, QMenu, QApplication,
@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtSvg import QSvgRenderer # Added QSvgRenderer
 import subprocess # Add subprocess
 import time # Added import for time.sleep
+import io # Import io for stream redirection
 
 # Import new widgets using relative paths
 from .widgets.proxy_item_widget import ProxyItemWidget
@@ -60,6 +61,8 @@ SAVE_ICON_PATH = os.path.join(ICONS_DIR, "save.svg")
 CANCEL_ICON_PATH = os.path.join(ICONS_DIR, "x-circle.svg")
 EDIT_ICON_PATH = os.path.join(ICONS_DIR, "edit.svg")
 DELETE_ICON_PATH = os.path.join(ICONS_DIR, "trash.svg")
+LOGS_ICON_PATH = os.path.join(ICONS_DIR, "logs.svg") # Add new icon path
+CLEAR_LOGS_ICON_PATH = os.path.join(ICONS_DIR, "clear-logs.svg") # Add new icon path
 
 # Stylesheet Paths
 DARK_THEME_PATH = os.path.join(STYLES_DIR, "dark.qss")
@@ -168,6 +171,35 @@ def create_icon_from_svg_data(svg_data: bytes) -> QIcon:
 
     return QIcon(pixmap)
 
+# --- Stream Redirection ---
+class StreamEmitter(QObject):
+    """Emits text written to it via a signal AND writes to original stream."""
+    textWritten = Signal(str)
+
+    def __init__(self, original_stream, parent=None): # Accept original stream
+        super().__init__(parent)
+        self.buffer = ""
+        self.original_stream = original_stream # Store original stream
+
+    def write(self, text):
+        try:
+            # Write to the original stream first
+            if self.original_stream:
+                self.original_stream.write(str(text))
+                self.original_stream.flush() # Ensure it appears in console immediately
+        except Exception as e:
+            # Avoid crashing if original stream is somehow closed/invalid
+            print(f"[StreamEmitter Error] Failed to write to original stream: {e}", file=sys.__stderr__) # Use original stderr for this error
+
+        # Emit the signal for the UI
+        self.textWritten.emit(str(text))
+
+
+    def flush(self):
+        # Flushing the original stream is handled in write
+        pass
+# --- End Stream Redirection ---
+
 class MainWindow(QMainWindow):
     """Main application window."""
 
@@ -181,7 +213,7 @@ class MainWindow(QMainWindow):
         # Set application details for QSettings
         QApplication.setOrganizationName("wyrtensi") # Example name
         QApplication.setApplicationName("ProxieWy")
-        QApplication.setApplicationVersion("1.0.0") # Example version
+        QApplication.setApplicationVersion("1.1.1") # Example version
 
         self.resize(self.NEW_DEFAULT_WIDTH, self.DEFAULT_HEIGHT)
 
@@ -206,6 +238,14 @@ class MainWindow(QMainWindow):
         self.settings_file = os.path.join(config_dir, "settings.ini")
         print(f"Using settings file: {self.settings_file}")
         # --- End Settings File Path ---
+
+        # --- Add Stream Redirection BEFORE creating log widget ---
+        # ---> Pass original streams to StreamEmitter <---
+        self._stdout_emitter = StreamEmitter(sys.__stdout__) # Pass original stdout
+        self._stderr_emitter = StreamEmitter(sys.__stderr__) # Pass original stderr
+        sys.stdout = self._stdout_emitter
+        sys.stderr = self._stderr_emitter
+        # --- End Stream Redirection ---
 
         # Data Stores (Initialize early)
         self.sidebar_buttons = []
@@ -279,11 +319,14 @@ class MainWindow(QMainWindow):
         # Create SVG buttons for main navigation
         self.nav_button_rules = create_svg_button(object_name="navButtonRules")
         self.nav_button_proxies = create_svg_button(object_name="navButtonProxies")
+        self.nav_button_logs = create_svg_button(object_name="navButtonLogs") # Add logs button
         self.nav_button_settings = create_svg_button(object_name="navButtonSettings")
 
-        self.sidebar_buttons = [self.nav_button_rules, self.nav_button_proxies, self.nav_button_settings]
+        # Update sidebar_buttons list
+        self.sidebar_buttons = [self.nav_button_rules, self.nav_button_proxies, self.nav_button_logs, self.nav_button_settings]
         self.nav_button_rules.setToolTip("Manage Domain Routing Rules")
         self.nav_button_proxies.setToolTip("Manage Proxy Servers")
+        self.nav_button_logs.setToolTip("View Application Logs") # Add tooltip
         self.nav_button_settings.setToolTip("Application Settings")
 
         # --- Main Content Area (Stacked Widget) ---
@@ -428,6 +471,39 @@ class MainWindow(QMainWindow):
         proxies_page_layout.addWidget(self.scroll_area)
         # --- End Proxies Page ---
 
+        # --- Logs Page ---
+        self.logs_page = QWidget()
+        self.logs_page.setObjectName("LogsPage")
+        logs_page_layout = QVBoxLayout(self.logs_page)
+        logs_page_layout.setContentsMargins(0, 0, 0, 0)
+        logs_page_layout.setSpacing(0)
+
+        # Add a header with a clear button
+        log_header_widget = QWidget()
+        log_header_widget.setObjectName("PageHeaderContainer")
+        log_header_layout = QHBoxLayout(log_header_widget)
+        log_header_layout.setContentsMargins(15, 10, 15, 10)
+        log_header_layout.addWidget(QLabel("Application Logs"), stretch=1)
+        self.clear_logs_button = QPushButton(" Clear Logs") # Added space for icon
+        self.clear_logs_button.setObjectName("ClearLogsButton") # Style if needed
+        # ---> Apply the new icon <---
+        if os.path.exists(CLEAR_LOGS_ICON_PATH):
+            # We'll set the actual QIcon in _apply_theme_colors
+            self.clear_logs_button.setProperty("iconPath", CLEAR_LOGS_ICON_PATH)
+            # self.clear_logs_button.setIcon(QIcon(CLEAR_LOGS_ICON_PATH)) # Placeholder icon
+        self.clear_logs_button.setToolTip("Clear the log view") # Tooltip
+        log_header_layout.addWidget(self.clear_logs_button)
+        logs_page_layout.addWidget(log_header_widget)
+
+        self.log_text_edit = QTextEdit()
+        self.log_text_edit.setObjectName("LogTextEdit")
+        self.log_text_edit.setReadOnly(True)
+        # Optional: Set monospace font
+        # from PySide6.QtGui import QFontDatabase
+        # font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+        # self.log_text_edit.setFont(font)
+        logs_page_layout.addWidget(self.log_text_edit, stretch=1) # Log area takes remaining space
+
         # --- Settings Page ---
         self.settings_page = QWidget()
         settings_page_layout = QVBoxLayout(self.settings_page)
@@ -567,6 +643,7 @@ class MainWindow(QMainWindow):
         # --- Add Pages to Stack ---
         self.main_content_area.addWidget(self.rules_page)
         self.main_content_area.addWidget(self.proxies_page)
+        self.main_content_area.addWidget(self.logs_page)
         self.main_content_area.addWidget(self.settings_page)
 
         # --- Status Bar ---
@@ -637,6 +714,7 @@ class MainWindow(QMainWindow):
         # Add Navigation buttons
         sidebar_layout.addWidget(self.nav_button_rules, alignment=Qt.AlignmentFlag.AlignCenter)
         sidebar_layout.addWidget(self.nav_button_proxies, alignment=Qt.AlignmentFlag.AlignCenter)
+        sidebar_layout.addWidget(self.nav_button_logs, alignment=Qt.AlignmentFlag.AlignCenter) # Add logs button
         sidebar_layout.addStretch() # Push settings to bottom
         sidebar_layout.addWidget(self.nav_button_settings, alignment=Qt.AlignmentFlag.AlignCenter)
 
@@ -655,7 +733,8 @@ class MainWindow(QMainWindow):
         # Navigation Buttons
         self.nav_button_rules.clicked.connect(lambda: self._handle_nav_click(0, self.nav_button_rules))
         self.nav_button_proxies.clicked.connect(lambda: self._handle_nav_click(1, self.nav_button_proxies))
-        self.nav_button_settings.clicked.connect(lambda: self._handle_nav_click(2, self.nav_button_settings))
+        self.nav_button_logs.clicked.connect(lambda: self._handle_nav_click(2, self.nav_button_logs)) # Connect logs button
+        self.nav_button_settings.clicked.connect(lambda: self._handle_nav_click(3, self.nav_button_settings)) # Update index
 
         # Main Toggle Button
         self.toggle_proxy_button.clicked.connect(self._handle_toggle_proxy)
@@ -729,11 +808,20 @@ class MainWindow(QMainWindow):
         self.hotkey_manager.quick_add_rule_triggered.connect(self._trigger_quick_add_rule) # Connect quick add
         self.hotkey_manager.error_occurred.connect(self._handle_hotkey_error)
 
+        # Logs Page Connections
+        self._stdout_emitter.textWritten.connect(self._append_log_text)
+        self._stderr_emitter.textWritten.connect(self._append_log_text)
+        self.clear_logs_button.clicked.connect(self.log_text_edit.clear)
+
     def _handle_nav_click(self, index: int, clicked_button: QPushButton):
         """Handles clicks on navigation buttons."""
         # Cancel any ongoing edits (use animation=False for instant close)
-        self._cancel_proxy_edit(animate=False)
-        self._cancel_rule_edit(animate=False)
+        # Check if index is not the proxy page before canceling proxy edit
+        if index != 1: # Index 1 is Proxies page
+             self._cancel_proxy_edit(animate=False)
+        # Check if index is not the rules page before canceling rule edit
+        if index != 0: # Index 0 is Rules page
+             self._cancel_rule_edit(animate=False)
 
         self.main_content_area.setCurrentIndex(index)
         self._update_active_button_style(clicked_button)
@@ -813,9 +901,11 @@ class MainWindow(QMainWindow):
          nav_icon_color = self._get_main_icon_color("nav")
          rules_svg = load_and_colorize_svg_content(RULES_ICON_PATH, nav_icon_color)
          proxies_svg = load_and_colorize_svg_content(PROXIES_ICON_PATH, nav_icon_color)
+         logs_svg = load_and_colorize_svg_content(LOGS_ICON_PATH, nav_icon_color) # Add logs icon
          settings_svg = load_and_colorize_svg_content(SETTINGS_ICON_PATH, nav_icon_color)
          self.nav_button_rules.setIcon(create_icon_from_svg_data(rules_svg))
          self.nav_button_proxies.setIcon(create_icon_from_svg_data(proxies_svg))
+         self.nav_button_logs.setIcon(create_icon_from_svg_data(logs_svg)) # Set logs icon
          self.nav_button_settings.setIcon(create_icon_from_svg_data(settings_svg))
          # Note: Hover/Checked state icon changes need more complex handling
          # (e.g., custom paintEvent or swapping icons on state change signals)
@@ -841,6 +931,16 @@ class MainWindow(QMainWindow):
          # if hasattr(self, 'filter_icon'): # Assuming filter_icon is a QLabel
          #    filter_svg = load_and_colorize_svg_content(SEARCH_ICON_PATH, self._get_main_icon_color())
          #    # Render to pixmap and set on label...
+
+         # --- Clear Logs Button ---
+         if hasattr(self, 'clear_logs_button') and self.clear_logs_button.property("iconPath"):
+             # ---> Use the same color key as Add buttons for consistency <---
+             clear_logs_icon_color = self._get_main_icon_color("add_button")
+             clear_logs_svg = load_and_colorize_svg_content(self.clear_logs_button.property("iconPath"), clear_logs_icon_color)
+             self.clear_logs_button.setIcon(create_icon_from_svg_data(clear_logs_svg))
+             # ---> Set Icon Size Explicitly to Match Add Buttons (Optional, if needed) <---
+             # icon_size = QSize(16, 16) # Or whatever size Add button uses
+             # self.clear_logs_button.setIconSize(icon_size)
 
 
     def _update_toggle_button_state(self, status: str):
@@ -1046,7 +1146,7 @@ class MainWindow(QMainWindow):
         self.close_to_tray_checkbox.setChecked(self.close_behavior == "minimize")
         self.close_to_tray_checkbox.blockSignals(False) # <<< Unblock signals
 
-        # Load Last View
+        # Load Last View (Adjust index check for new button count)
         last_index = settings.value("ui/last_view_index", defaultValue=0, type=int)
         # We'll apply this in _set_initial_active_view after widgets are ready
 
@@ -1188,7 +1288,7 @@ class MainWindow(QMainWindow):
         self.close_behavior = "minimize" if self.close_to_tray_checkbox.isChecked() else "exit"
         settings.setValue("app/close_behavior", self.close_behavior)
 
-        # Save Last View
+        # Save Last View (Index might have changed)
         settings.setValue("ui/last_view_index", self.main_content_area.currentIndex())
 
         # --- Save Profiles ---
@@ -1263,20 +1363,25 @@ class MainWindow(QMainWindow):
 
     def _set_initial_active_view(self):
         """Sets the active view based on loaded settings or default."""
-        settings = QSettings()
+        settings = QSettings(self.settings_file, QSettings.Format.IniFormat)
+        # Default to Rules (index 0) if nothing saved
         last_index = settings.value("ui/last_view_index", defaultValue=0, type=int)
-        # Ensure index is valid
+        # Ensure index is valid for the *current* number of buttons/views
         last_index = max(0, min(last_index, self.main_content_area.count() - 1))
 
         if 0 <= last_index < len(self.sidebar_buttons):
             self.main_content_area.setCurrentIndex(last_index)
             button_to_activate = self.sidebar_buttons[last_index]
-            button_to_activate.setChecked(True)
-            self._update_active_button_style(button_to_activate)
-        elif self.sidebar_buttons: # Fallback to first button if index invalid
-             self.main_content_area.setCurrentIndex(0)
-             self.sidebar_buttons[0].setChecked(True)
-             self._update_active_button_style(self.sidebar_buttons[0])
+            # Check if button exists before setting checked state
+            if button_to_activate:
+                button_to_activate.setChecked(True)
+                self._update_active_button_style(button_to_activate)
+        elif self.sidebar_buttons: # Fallback to first button if index invalid or button missing
+             default_index = 0
+             self.main_content_area.setCurrentIndex(default_index)
+             if self.sidebar_buttons[default_index]:
+                self.sidebar_buttons[default_index].setChecked(True)
+                self._update_active_button_style(self.sidebar_buttons[default_index])
 
     def _get_proxy_name_map(self) -> dict:
         """Helper to get a map of {proxy_id: proxy_name}."""
@@ -3237,7 +3342,7 @@ class MainWindow(QMainWindow):
     def _create_clear_hotkey_button(self, target_edit: QKeySequenceEdit, hotkey_name: str) -> QToolButton:
         """Creates a clear button for a hotkey."""
         button = QToolButton()
-        button.setText("✕") # Use a clear symbol
+        button.setText("X") # Use a clear symbol
         button.setObjectName("ClearHotkeyButton")
         button.setToolTip(f"Clear {hotkey_name} hotkey")
         # Use lambda to ensure correct target_edit is passed
@@ -3607,3 +3712,18 @@ class MainWindow(QMainWindow):
                 
         except Exception as e:
             print(f"[Error] Failed to scroll to item: {e}")
+
+    # --- Add Slot for Appending Log Text ---
+    def _append_log_text(self, text):
+        """Appends text to the log view QTextEdit."""
+        # Use insertPlainText to avoid automatic newline addition by append()
+        cursor = self.log_text_edit.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End) # Move cursor to the end
+        self.log_text_edit.setTextCursor(cursor)          # Apply cursor position
+        self.log_text_edit.insertPlainText(text)          # Insert text exactly as received
+
+        # Optional: Auto-scroll to bottom
+        sb = self.log_text_edit.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    # ... (rest of MainWindow methods) ...

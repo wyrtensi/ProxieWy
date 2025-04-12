@@ -1,8 +1,8 @@
 # UTF-8
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 1, 0, 0),
-    prodvers=(1, 1, 0, 0),
+    filevers=(1, 1, 1, 0),
+    prodvers=(1, 1, 1, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -18,12 +18,12 @@ VSVersionInfo(
           [
             StringStruct('CompanyName', 'wyrtensi'),
             StringStruct('FileDescription', 'ProxieWy'),
-            StringStruct('FileVersion', '1.1.0.0'),
+            StringStruct('FileVersion', '1.1.1.0'),
             StringStruct('InternalName', 'main.py'),
             StringStruct('LegalCopyright', 'wyrtensi'),
             StringStruct('OriginalFilename', 'ProxieWy'),
             StringStruct('ProductName', 'ProxieWy'),
-            StringStruct('ProductVersion', '1.1.0.0'),
+            StringStruct('ProductVersion', '1.1.1.0'),
           ]
         )
       ]

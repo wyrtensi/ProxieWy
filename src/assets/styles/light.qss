@@ -43,6 +43,7 @@ QToolButton#ToggleProxyButton:checked:hover {
 /* === Navigation Buttons (Sidebar SVG) === */
 QPushButton#navButtonRules,
 QPushButton#navButtonProxies,
+QPushButton#navButtonLogs,
 QPushButton#navButtonSettings {
     background-color: transparent;
     border: none;
@@ -51,11 +52,13 @@ QPushButton#navButtonSettings {
 }
 QPushButton#navButtonRules:hover,
 QPushButton#navButtonProxies:hover,
+QPushButton#navButtonLogs:hover,
 QPushButton#navButtonSettings:hover {
     background-color: #cccccc;
 }
 QPushButton#navButtonRules:checked,
 QPushButton#navButtonProxies:checked,
+QPushButton#navButtonLogs:checked,
 QPushButton#navButtonSettings:checked {
     background-color: #d8d8d8;
     border-left: 3px solid #007acc;
@@ -68,7 +71,11 @@ QLabel {
     background-color: transparent;
 }
 
-QPushButton { /* General Button Style */
+QPushButton, /* General Button Style */
+QPushButton#AddProxyButton, /* Explicitly target for clarity */
+QPushButton#AddRuleButton,
+QPushButton#ClearLogsButton /* <<< Add ClearLogsButton */
+{
     background-color: #d0d0d0;
     color: #1c1c1c;
     border: 1px solid #b0b0b0;
@@ -77,15 +84,29 @@ QPushButton { /* General Button Style */
     font-size: 14px;
     font-weight: bold;
     min-height: 20px;
+    /* Add icon-size if needed */
+    /* icon-size: 16px; */
 }
-QPushButton:hover {
+QPushButton:hover,
+QPushButton#AddProxyButton:hover,
+QPushButton#AddRuleButton:hover,
+QPushButton#ClearLogsButton:hover /* <<< Add hover state */
+{
     background-color: #c0c0c0;
     border-color: #a0a0a0;
 }
-QPushButton:pressed {
+QPushButton:pressed,
+QPushButton#AddProxyButton:pressed,
+QPushButton#AddRuleButton:pressed,
+QPushButton#ClearLogsButton:pressed /* <<< Add pressed state */
+{
     background-color: #b0b0b0;
 }
-QPushButton:disabled {
+QPushButton:disabled,
+QPushButton#AddProxyButton:disabled,
+QPushButton#AddRuleButton:disabled,
+QPushButton#ClearLogsButton:disabled /* <<< Add disabled state */
+{
     background-color: #e0e0e0;
     color: #888;
     border-color: #c5c5c5;
@@ -288,9 +309,8 @@ QComboBox QAbstractItemView { /* The popup list */
 
 /* Settings Page specific */
 QLabel#VersionLabel {
-    font-size: 11px;
+    font-size: 13px;
     color: #555;
-    padding-top: 10px;
 }
 
 /* Target the scroll area itself */
@@ -551,3 +571,23 @@ QListWidget#RuleListWidget::item:selected {
     background-color: transparent; /* Make selection transparent */
     color: #1c1c1c;
 } 
+
+/* === Log View === */
+QTextEdit#LogTextEdit {
+    background-color: #f0f0f0; /* <<< Match page background */
+    border: none; /* Remove border */
+    outline: none; /* Remove outline */
+    color: #1c1c1c; /* <<< Ensure text color is set */
+    /* Keep standard selection colors */
+    selection-background-color: palette(highlight);
+    selection-color: palette(highlighted-text);
+    padding-left: 5px; /* Add a little internal padding */
+}
+
+/* Optional: Slightly different background on focus instead of border */
+/*
+QTextEdit#LogTextEdit:focus {
+    background-color: #slightly-different-than-page-bg;
+}
+*/
+
