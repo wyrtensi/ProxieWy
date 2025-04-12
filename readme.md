@@ -19,13 +19,20 @@
     *   Built-in support for **authenticated proxies** (username/password).
     *   **Test proxy connectivity** with a single click to ensure they are working.
 *   **🚦 Rule-Based Routing:**
-    *   Define granular rules to forward traffic for specific **domains** (e.g., `example.com`) or **wildcard patterns** (e.g., `*.example.net`).
+    *   Define granular rules to forward traffic for specific **domains** (e.g., `example.com`) or **wildcard patterns** (e.g., `*.example.net`) or **IP adress** (e.g., `1.1.1.1`).
     *   Route matched traffic through a **chosen proxy** or allow **direct connection**.
     *   Quickly **enable or disable** individual rules without deleting them.
-*   **🎭 Profiles (actually requires proxy engine restart):**
+    *   **(New!)** Quickly add a rule based on **currently selected text** (attempts to copy from focused application) or clipboard content via a **global hotkey**.
+*   **🎭 Profiles:**
     *   Organize rules into distinct **profiles** (e.g., "Work VPN", "Home Streaming", "Development").
-    *   **Switch active profiles** effortlessly via the UI (or future hotkeys).
+    *   **Switch active profiles** effortlessly via the UI or global hotkeys.
     *   Designate rules as **global** (apply always) or **profile-specific**.
+*   **⌨️ Global Hotkeys:**
+    *   Configure and use **system-wide hotkeys** to:
+        *   Toggle the proxy engine on/off.
+        *   Show/Hide the application window.
+        *   Switch to the next/previous profile.
+        *   Trigger the "Quick Add Rule" dialog (attempts to copy selected text).
 *   **🖥️ System Integration:**
     *   Convenient **system tray icon** displaying the current engine status (Active, Inactive, Error).
     *   Flexible window behavior: **minimize to tray** or **exit** on close.
@@ -43,6 +50,8 @@
 *   **Python:** Version 3.10 or newer is recommended.
 *   **PySide6:** The official Qt for Python bindings.
 *   **PySocks:** (Optional, but required for `SOCKS5` proxy functionality).
+*   **pynput:** Required for global hotkey support.
+*   **(Windows Only)** **pywin32:** Recommended for more reliable hotkey simulation (copy action).
 
 ## 📦 Installation & Setup
 
@@ -67,9 +76,11 @@
 3.  **Install Dependencies:**
     *(Make sure you have a `requirements.txt` file)*
     ```bash
-    # requirements.txt should contain:
+    # Example requirements.txt:
     # PySide6>=6.5
-    # PySocks>=1.7 # If using SOCKS5
+    # PySocks>=1.7 # Optional for SOCKS5
+    # pynput>=1.7
+    # pywin32>=300 # If on Windows
 
     pip install -r requirements.txt
     ```
@@ -91,26 +102,28 @@ The application will start, typically minimized to the system tray. Click the tr
     *   *Windows:* `%LOCALAPPDATA%\wyrtensi\ProxieWy\settings.ini`
 *   **Adding Proxies:** Use the "Proxies" tab -> "Add Proxy" button. Fill in the details (name, type, address, port, auth). Test proxies using the⚡️ icon.
 *   **Creating Rules:** Go to the "Rules" tab. Select the desired `Profile` from the dropdown (or "All Rules" for global). Click "Add Rule(s)", enter domain(s) (one per line), and choose the target proxy or "Direct Connection".
+*   **Quick Adding Rules:** Select a URL/domain in *any* application, press the configured "Quick Add Rule" hotkey. ProxieWy will attempt to simulate a Copy command and then open the dialog with the domain parsed from the clipboard. (Note: Simulation reliability depends on OS and focus).
 *   **Managing Profiles:** Use the "Settings" tab to add, rename, or delete profiles. The **active profile** (determining which rules are currently used by the engine) is selected via the dropdown on the **"Rules" tab**.
 *   **How Profiles Work:** The proxy engine uses rules assigned to the **currently active profile** *plus* any rules assigned to **"All Rules (Default)"**.
+*   **Global Hotkeys:** Configure shortcuts in the "Settings" tab for various actions.
 *   **System Proxy (Windows):** Toggling the main switch (top-left in the sidebar) automatically attempts to enable/disable the Windows system proxy settings. Network-aware applications might need a restart to recognize the change.
 
 ## 🧑‍💻 Development Insights
 
 *   **Project Structure:**
     *   `src/gui/`: User interface components (main window, custom widgets).
-    *   `src/core/`: Backend logic (proxy engine, rule matcher).
+    *   `src/core/`: Backend logic (proxy engine, rule matcher, hotkey manager).
     *   `src/assets/`: Static files (icons, images, `.qss` stylesheets).
 *   **Styling:** Uses Qt Style Sheets (`.qss`) located in `src/assets/styles` for theming.
-*   **Global Hotkeys:** While the settings UI allows configuring hotkey preferences, actual global registration is not implemented due to cross-platform complexity. This would require additional libraries like `pynput` or `keyboard`.
+*   **Global Hotkeys:** Implemented using `pynput` for listening and platform-specific simulation (like `ctypes` on Windows) for the "copy selected" feature. Requires appropriate permissions (e.g., Accessibility on macOS).
 
 ## 🌱 Future Ideas (Potential Enhancements)
 
 *   [ ] Add import/export functionality for proxies and rules.
 *   [ ] Visual traffic monitoring/logging within the UI.
 *   [ ] Cross-platform system proxy configuration (macOS, Linux).
-*   [v] Packaging for easier distribution (pyinstaller --onefile --noconsole --icon=icon.ico --version-file version.txt --add-data "src/assets/;src/assets/" main.py).
-*   [ ] Fast adding selected urls to the proxy rules.
+*   [x] Packaging for easier distribution (pyinstaller --onefile --noconsole --icon=icon.ico --version-file version.txt --add-data "src/assets/;src/assets/" main.py).
+*   [xSS] Fast adding selected urls to the proxy rules via hotkey.
 
 Please ensure your code adheres to basic style guidelines and includes appropriate documentation or tests where necessary.
 

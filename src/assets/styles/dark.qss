@@ -106,17 +106,31 @@ QTextEdit { /* Specific styling for multiline edit */
 }
 
 /* === Status Bar === */
-QStatusBar#StatusBar {
-    background-color: #27293d;
+QWidget#StatusBar {
+    background-color:rgb(32, 33, 48);
     color: #c0c0c0;
+    border-top: 1px solid #3a3c54; /* Add top border to match sidebar */
 }
-QStatusBar#StatusBar::item {
+QWidget#StatusBar::item {
     border: none;
 }
 /* Status Bar Label */
-QStatusBar#StatusBar > QLabel {
+QWidget#StatusBar > QLabel {
     color: #c0c0c0; /* Match status bar text color */
     padding-left: 5px;
+}
+
+/* Version label in status bar */
+QLabel#VersionLabel {
+    font-size: 11px;
+    color: #888;
+    padding: 0px 5px;
+}
+
+/* Status bar vertical separator */
+QFrame#StatusBarSeparator {
+    color: #3a3c54; /* Match top border color */
+    width: 1px;
 }
 
 /* === Menu === */
@@ -165,6 +179,12 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
 }
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
     background: none; /* Hide page area */
+}
+
+/* === Proxy List Container === */
+QWidget#ProxyListContainer {
+    background-color: transparent; /* Make container transparent */
+    border: none;
 }
 
 /* === Proxy/Rule Page Specific === */
@@ -299,13 +319,8 @@ QWidget#RuleListContainer {
     background-color: transparent; /* Match window background */
 }
 
-/* Ensure filter bar looks consistent */
-QLineEdit {
-    /* General QLineEdit styles */
-    /* ... */
-}
+/* Filter Bar */
 QWidget QLineEdit { /* Filter input specifically */
-    /* Styles previously defined */
     border-radius: 15px;
     padding: 5px 15px;
     border: 1px solid #4a4e69;
@@ -314,6 +329,14 @@ QWidget QLineEdit { /* Filter input specifically */
 }
 QWidget QLineEdit:focus {
     border: 1px solid #80a4ff;
+}
+
+/* Count label in filter bar */
+QLabel#CountLabel {
+    color: #a0a0c0;
+    font-size: 13px;
+    padding-left: 10px;
+    min-width: 70px;
 }
 
 /* Proxy/Rule Item */
@@ -425,15 +448,53 @@ QLabel#VersionLabel {
     padding-top: 10px; /* Space above version label */
 }
 
+QListWidget#ProfileListWidget {
+    background-color: #27293d; /* Match sidebar/editor bg */
+    border: 1px solid #3a3c54; /* Consistent border */
+    border-radius: 4px;
+    color: #e0e0e0; /* Default text color */
+    outline: none; /* Remove focus outline */
+}
+QListWidget#ProfileListWidget::item {
+    padding: 5px 8px; /* Adjust padding */
+    color: #e0e0e0;
+    border-radius: 3px; /* Slight rounding for selection */
+}
+QListWidget#ProfileListWidget::item:selected {
+    background-color: #4a4e69; /* Selection background */
+    color: #ffffff; /* Brighter text for selected */
+} 
+
+/* Target the scroll area itself */
+QScrollArea#SettingsScrollArea {
+    background-color: transparent;
+    border: none;
+}
+
+/* Target the direct child widget *inside* the scroll area */
+/* This is often a QWidget acting as a viewport or container */
+QScrollArea#SettingsScrollArea > QWidget {
+    background-color: transparent;
+    border: none;
+}
+
+/* Also target the named content widget if needed, though the above should cover it */
+QWidget#settings_content_widget { /* Make sure the object name matches the Python code */
+     background-color: transparent;
+     border: none;
+}
+
 /* === Settings Page Checkboxes === */
 QCheckBox#CloseToTrayCheckbox,
-QCheckBox#StartEngineCheckbox {
+QCheckBox#StartEngineCheckbox,
+QCheckBox#SystemProxyCheckbox {
     spacing: 8px; /* Consistent spacing */
     /* Add any other base QCheckBox styling if needed */
 }
 
 QCheckBox#CloseToTrayCheckbox::indicator,
-QCheckBox#StartEngineCheckbox::indicator {
+QCheckBox#StartEngineCheckbox::indicator,
+QCheckBox#SystemProxyCheckbox::indicator {
     width: 16px;
     height: 16px;
     border-radius: 3px;
@@ -442,19 +503,22 @@ QCheckBox#StartEngineCheckbox::indicator {
 }
 
 QCheckBox#CloseToTrayCheckbox::indicator:unchecked:hover,
-QCheckBox#StartEngineCheckbox::indicator:unchecked:hover {
+QCheckBox#StartEngineCheckbox::indicator:unchecked:hover,
+QCheckBox#SystemProxyCheckbox::indicator:unchecked:hover {
     border: 1px solid #5a5e7a; /* Hover border */
     background-color: #3a3c54; /* Hover background */
 }
 
 QCheckBox#CloseToTrayCheckbox::indicator:checked,
-QCheckBox#StartEngineCheckbox::indicator:checked {
+QCheckBox#StartEngineCheckbox::indicator:checked,
+QCheckBox#SystemProxyCheckbox::indicator:checked {
     border: 2px solid #8a8ee0; /* Thicker/brighter border */
     background-color: #8a8ee0; /* Fill with border color */
 }
 
 QCheckBox#CloseToTrayCheckbox::indicator:checked:hover,
-QCheckBox#StartEngineCheckbox::indicator:checked:hover {
+QCheckBox#StartEngineCheckbox::indicator:checked:hover,
+QCheckBox#SystemProxyCheckbox::indicator:checked:hover {
     border: 2px solid #9a9ee0; /* Brighter hover border */
     background-color: #9a9ee0; /* Fill with hover border color */
 }
@@ -502,5 +566,26 @@ QPushButton#DeleteProfileButton:hover {
 QLabel#AuthIndicatorLabel {
     background-color: transparent;
     padding-left: 5px; /* Add some space */
+}
+
+/* Settings Page Specific */
+/* ... other settings styles ... */
+
+QListWidget#RuleListWidget { /* Changed from ProfileListWidget */
+    background-color: transparent; /* <<< Make transparent */
+    border: none; /* <<< Remove border */
+    color: #e0e0e0;
+    outline: none;
+}
+QListWidget#RuleListWidget::item {
+    padding: 5px 8px;
+    color: #e0e0e0;
+    border-radius: 3px;
+    /* Remove item background unless selected */
+    background-color: transparent;
+}
+QListWidget#RuleListWidget::item:selected {
+    background-color: transparent; /* Make selection transparent */
+    color: #ffffff;
 }
 

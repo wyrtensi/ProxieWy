@@ -2,8 +2,8 @@ from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QFrame, QSpacerItem,
     QSizePolicy, QCheckBox
 )
-from PySide6.QtCore import Qt, Signal, QSize
-from PySide6.QtGui import QIcon, QColor # Add QColor
+from PySide6.QtCore import Qt, Signal, QSize, QRect
+from PySide6.QtGui import QIcon, QColor, QPixmap, QPainter
 import os
 # Assuming helper functions are available (defined/imported)
 # from ..utils import load_and_colorize_svg_content, create_icon_from_svg_data
@@ -43,7 +43,7 @@ class RuleItemWidget(QFrame):
         """
         super().__init__(parent)
         self.rule_id = rule_data.get("id", "N/A") # Store the unique ID
-        self.domain = rule_data.get("domain", "N/A")
+        self.domain = rule_data.get("domain", "N/A") # This field holds domain or IP
         self.proxy_id = rule_data.get("proxy_id")
         self.profile_id = rule_data.get("profile_id") # Store profile ID
         self.proxy_name_map = proxy_name_map
@@ -162,15 +162,15 @@ class RuleItemWidget(QFrame):
         """Update the displayed information and label styles with fixed opaque text color."""
         self.rule_data = rule_data # Store updated data
         self.rule_id = rule_data.get("id", self.rule_id)
-        self.domain = rule_data.get("domain", self.domain) # Domain is fixed per rule ID
+        self.domain = rule_data.get("domain", self.domain) # Update domain/IP field
         self.proxy_id = rule_data.get("proxy_id")
         self.profile_id = rule_data.get("profile_id") # Update profile ID
         self.proxy_name_map = proxy_name_map
         self.profile_name_map = profile_name_map # Update profile map
         enabled = rule_data.get("enabled", True) # Default to enabled
 
-        self.domain_label.setText(f"<b>{self.domain}</b>")
-        self.domain_label.setToolTip(self.domain)
+        self.domain_label.setText(f"<b>{self.domain}</b>") # Display the domain or IP
+        self.domain_label.setToolTip(self.domain) # Tooltip shows the full value
 
         label_alpha = 60 # Keep background transparency
 
@@ -204,12 +204,14 @@ class RuleItemWidget(QFrame):
         self.proxy_label.setToolTip(f"Proxy: {proxy_display_name}")
 
         # --- Update Profile Label ---
-        profile_display_name = "Default (All)"
-        profile_bg_color = generate_color_from_id(self.profile_id, saturation=0.5, lightness=0.6)
+        profile_display_name = f"Profile ID: {self.profile_id[:6]}... (Not Found)" # Default if map is wrong
+        profile_bg_color = generate_color_from_id(self.profile_id, saturation=0.5, lightness=0.6) # Use ID for color
         if self.profile_id and self.profile_id in self.profile_name_map:
             profile_display_name = self.profile_name_map[self.profile_id]
-        elif self.profile_id:
-             profile_display_name = f"Profile ID: {self.profile_id[:6]}... (Not Found)"
+        # elif self.profile_id is None: # This case should no longer happen
+        #     profile_display_name = "Default (All)" # Fallback text removed
+        #     profile_bg_color = QColor("#888888") # Default color removed
+
         self.profile_label.setText(f"{profile_display_name}")
         profile_bg_color.setAlpha(label_alpha)
         # Apply style to profile label with fixed opaque text color

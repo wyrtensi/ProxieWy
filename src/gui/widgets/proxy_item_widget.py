@@ -2,59 +2,27 @@ from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QFrame, QSpacerItem,
     QSizePolicy
 )
-from PySide6.QtCore import Qt, Signal, QSize
+from PySide6.QtCore import Qt, Signal, QSize, QRect
 from PySide6.QtGui import QIcon, QPixmap, QPainter # Keep QPainter for rendering
 from PySide6.QtSvg import QSvgRenderer # Keep QSvgRenderer
 import os
-import re
+# import re # No longer needed here
 
-# Ensure utils is imported relatively
-from ..utils import load_and_colorize_svg_content, create_icon_from_svg_data # <<< Already relative, ensure it stays this way
+# Import utils relatively
+from ..utils import load_and_colorize_svg_content, create_icon_from_svg_data
 
 # Assume you have icons for edit/delete/auth in src/assets/icons/
-# e.g., edit.svg, trash.svg, key.svg
-EDIT_ICON_PATH = "src/assets/icons/edit.svg" # Replace with actual path
-DELETE_ICON_PATH = "src/assets/icons/trash.svg" # Replace with actual path
-AUTH_ICON_PATH = "src/assets/icons/key.svg" # Example icon for auth
-TEST_ICON_PATH = "src/assets/icons/zap.svg" # Example icon for test
-TESTING_ICON_PATH = "src/assets/icons/loader.svg" # Loading/spinner icon (optional)
+# Use relative paths from project root (or consistent base)
+EDIT_ICON_PATH = "src/assets/icons/edit.svg"
+DELETE_ICON_PATH = "src/assets/icons/trash.svg"
+AUTH_ICON_PATH = "src/assets/icons/key.svg"
+TEST_ICON_PATH = "src/assets/icons/zap.svg"
+TESTING_ICON_PATH = "src/assets/icons/loader.svg"
 
-# --- Define load_and_colorize_svg_content here or import ---
-def load_and_colorize_svg_content(icon_path: str, color: str) -> bytes:
-    """Loads SVG content and replaces/adds stroke with a specific color."""
-    try:
-        with open(icon_path, 'r', encoding='utf-8') as f:
-            svg_content = f.read()
-        # Prioritize replacing existing stroke="currentColor" or any stroke="..."
-        modified_content = re.sub(r'(<svg\b[^>]*?)(\bstroke\s*=\s*["\'][^"\']+["\'])', rf'\1 stroke="{color}"', svg_content, 1, re.IGNORECASE | re.DOTALL)
-        # If no stroke attribute was replaced, add it
-        if f'stroke="{color}"' not in modified_content and '<svg' in modified_content:
-             modified_content = re.sub(r'(<svg\b)', rf'\1 stroke="{color}"', modified_content, 1, re.IGNORECASE)
-        # Ensure fill is none for elements that shouldn't be filled (like lines/polygons)
-        modified_content = re.sub(r'(<(?:line|rect|circle|polygon|path)\b[^>]*?)(\bfill\s*=\s*["\'][^"\']+["\'])', r'\1 fill="none"', modified_content, flags=re.IGNORECASE | re.DOTALL)
-        # Ensure main svg tag has fill="none" unless stroke is none
-        if f'stroke="{color}"' in modified_content and 'fill="none"' not in modified_content[:modified_content.find('>')]:
-             modified_content = re.sub(r'(<svg\b)', r'\1 fill="none"', modified_content, 1, re.IGNORECASE)
+# --- Remove duplicated load_and_colorize_svg_content and create_icon_from_svg_data ---
+# (The functions previously defined here are now removed)
+# --- End Removal ---
 
-        return modified_content.encode('utf-8')
-    except FileNotFoundError:
-        print(f"Error: Icon file not found at {icon_path}")
-        return b""
-    except Exception as e:
-        print(f"Error loading/colorizing SVG {icon_path}: {e}")
-        return b""
-# --- End Helper ---
-
-def create_icon_from_svg_data(svg_data: bytes) -> QIcon:
-    """Creates QIcon from raw SVG data bytes."""
-    if not svg_data:
-        return QIcon() # Return empty icon on error
-    pixmap = QPixmap()
-    if pixmap.loadFromData(svg_data, "svg"):
-        return QIcon(pixmap)
-    else:
-        print("Warning: Failed to load pixmap from SVG data for icon.")
-        return QIcon()
 
 class ProxyItemWidget(QFrame):
     """Widget to display a single proxy item in a list."""
@@ -66,10 +34,14 @@ class ProxyItemWidget(QFrame):
     def __init__(self, proxy_data: dict, parent=None, theme_name='dark'):
         super().__init__(parent)
         self.proxy_id = proxy_data.get("id", "N/A")
-        self.setObjectName("ProxyItemFrame")
+        self.setObjectName("ProxyItemFrame") # Consistent object name
         self._current_status = "unknown" # unknown, testing, active, error, inactive
         self.theme_name = theme_name # Store theme name
         self.proxy_data = proxy_data # Store data
+
+        # Initialize icons to None initially
+        self.test_icon_default = None
+        self.testing_icon = None
 
         self._init_ui()            # Creates widgets
         self._apply_theme_colors() # Apply initial colors
@@ -79,7 +51,6 @@ class ProxyItemWidget(QFrame):
     def _get_icon_color(self, element_type: str = "default") -> str:
         """Gets the appropriate icon color based on theme."""
         if self.theme_name == 'dark':
-            # For dark theme, most icons are white
             if element_type == "delete_hover": return "#ffffff" # White on red bg
             if element_type == "hover": return "#e0e0e0" # Slightly off-white for hover
             return "#ffffff" # Default white
@@ -96,6 +67,7 @@ class ProxyItemWidget(QFrame):
 
         # --- Status Indicator ---
         self.status_indicator = QLabel("●")
+        self.status_indicator.setObjectName("StatusIndicatorLabel") # Add object name
         self.status_indicator.setFixedWidth(15)
         self.status_indicator.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -141,7 +113,9 @@ class ProxyItemWidget(QFrame):
         self.delete_button.clicked.connect(lambda: self.delete_requested.emit(self.proxy_id))
 
         for btn in [self.test_button, self.edit_button, self.delete_button]:
-            btn.setFixedSize(28, 28); btn.setIconSize(QSize(16, 16)) # Consistent size
+            # Use object names for styling size in QSS
+            # btn.setFixedSize(28, 28); btn.setIconSize(QSize(16, 16)) # Consistent size
+            pass # Size set in QSS
 
         button_layout.addWidget(self.test_button)
         button_layout.addWidget(self.edit_button)
@@ -161,6 +135,7 @@ class ProxyItemWidget(QFrame):
 
         # Buttons
         icon_color = self._get_icon_color()
+        # Pass relative path strings to the utility function
         test_svg = load_and_colorize_svg_content(TEST_ICON_PATH, icon_color)
         edit_svg = load_and_colorize_svg_content(EDIT_ICON_PATH, icon_color)
         delete_svg = load_and_colorize_svg_content(DELETE_ICON_PATH, icon_color)
@@ -182,23 +157,38 @@ class ProxyItemWidget(QFrame):
         if not self.auth_indicator_label.isVisible(): return
 
         target_color = self._get_icon_color()
-        icon_size = 14
+        icon_size = 14 # Desired display size for auth icon
         svg_data = load_and_colorize_svg_content(AUTH_ICON_PATH, target_color)
         if svg_data:
             # Render SVG data to QPixmap for QLabel
             renderer = QSvgRenderer(svg_data)
             if renderer.isValid():
                 pixmap = QPixmap(icon_size, icon_size); pixmap.fill(Qt.GlobalColor.transparent)
-                painter = QPainter(pixmap); renderer.render(painter); painter.end()
-                self.auth_indicator_label.setPixmap(pixmap)
-            else: self.auth_indicator_label.setText("🔒") # Fallback
-        else: self.auth_indicator_label.setText("🔒") # Fallback
+                painter = QPainter(pixmap)
+                # Define the target bounding rectangle for rendering
+                target_rect = QRect(0, 0, icon_size, icon_size)
+                renderer.render(painter, target_rect) # Render scaled into the target rect
+                painter.end()
+                if not pixmap.isNull():
+                     self.auth_indicator_label.setPixmap(pixmap)
+                else:
+                     print("Warning: Failed to render auth SVG to pixmap.")
+                     self.auth_indicator_label.setText("🔒") # Fallback
+            else:
+                print("Warning: Invalid SVG renderer for auth icon.")
+                self.auth_indicator_label.setText("🔒") # Fallback
+        else:
+            print("Warning: Failed to load/colorize auth SVG data.")
+            self.auth_indicator_label.setText("🔒") # Fallback
 
     def _request_test(self):
         """Handle test button click: update UI, set status, emit signal."""
         self.test_button.setEnabled(False)
         if self.testing_icon and not self.testing_icon.isNull():
              self.test_button.setIcon(self.testing_icon)
+        else:
+             # Fallback if loading icon failed
+             self.test_button.setText("...")
         self.test_button.setToolTip("Testing...")
         self.set_status("testing") # Update status indicator
         self.test_requested.emit(self.proxy_id)
@@ -209,15 +199,15 @@ class ProxyItemWidget(QFrame):
         self._current_status = status
 
         # Update visual indicator
-        color = "#9E9E9E" # Gray (inactive/unknown)
+        color = "#9E9E9E" # Gray (inactive/unknown) - Use theme-neutral color?
         tooltip = "Unknown / Inactive"
-        indicator_char = "●"
+        indicator_char = "●" # Default circle
 
         if status == "active":
             color = "#4CAF50"; tooltip = "Active / OK" # Green
         elif status == "error":
             color = "#F44336"; tooltip = "Error" # Red
-            indicator_char = "✖" # Different char for error
+            indicator_char = "○" # Different char for error
         elif status == "testing":
              color = "#FFC107"; tooltip = "Testing..." # Amber/Yellow
              indicator_char = "…" # Ellipsis for testing
@@ -226,7 +216,7 @@ class ProxyItemWidget(QFrame):
              indicator_char = "○" # Open circle
 
         self.status_indicator.setText(indicator_char)
-        self.status_indicator.setStyleSheet(f"color: {color};")
+        self.status_indicator.setStyleSheet(f"color: {color}; font-weight: bold;") # Make symbol bold
         self.status_indicator.setToolTip(tooltip)
 
         # Reset test button appearance when not testing
@@ -235,7 +225,11 @@ class ProxyItemWidget(QFrame):
         if not is_testing:
              if self.test_icon_default and not self.test_icon_default.isNull():
                   self.test_button.setIcon(self.test_icon_default) # Restore original colorized icon
-             else: self.test_button.setText("T") # Restore fallback if no icon
+             else:
+                 self.test_button.setText("T") # Restore fallback if no icon
+                 # Ensure icon is explicitly cleared if default is null
+                 if not self.test_icon_default or self.test_icon_default.isNull():
+                      self.test_button.setIcon(QIcon())
              self.test_button.setToolTip("Test Proxy Connection")
         # (Testing state appearance is handled in _request_test)
 
@@ -251,20 +245,22 @@ class ProxyItemWidget(QFrame):
         details_text = f"{proxy_data.get('type', 'N/A')} | {proxy_data.get('address', 'N/A')}:{proxy_data.get('port', 'N/A')}"
         self.details_label.setText(details_text)
         # Show/hide auth indicator
-        self.auth_indicator_label.setVisible(proxy_data.get('requires_auth', False))
-        if proxy_data.get('requires_auth', False):
+        requires_auth = proxy_data.get('requires_auth', False)
+        self.auth_indicator_label.setVisible(requires_auth)
+        if requires_auth:
             self._update_auth_icon_color() # Update icon color if visible
         # Set status based on loaded data or keep current if not specified
         last_known_status = proxy_data.get('status', self._current_status) # Use current if not in data
-        self.set_status(last_known_status) 
+        self.set_status(last_known_status)
 
     def set_theme(self, theme_name: str):
         if self.theme_name != theme_name:
             self.theme_name = theme_name
             self._apply_theme_colors() # Recolor all icons
-            self.update_data(self.proxy_data) # Update data with new theme
+            # Status indicator color is set dynamically, but auth needs update
+            self._update_auth_icon_color() # Recolor auth icon
+            # No need to call update_data here unless text content depends on theme
 
-    def update_theme(self, theme_name: str):
-        self.set_theme(theme_name)
-        self.update_data(self.proxy_data)
-        self.update_data(self.proxy_data) 
+    # Remove duplicate update_theme method if present
+    # def update_theme(self, theme_name: str):
+    #     self.set_theme(theme_name) 

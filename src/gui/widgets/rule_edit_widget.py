@@ -4,6 +4,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal
 import re # For domain validation
+import ipaddress # For IP validation
 
 class RuleEditWidget(QFrame):
     """Widget for adding or editing domain routing rules."""
@@ -44,9 +45,9 @@ class RuleEditWidget(QFrame):
         form_layout.setSpacing(8)
 
         # Domain (Revert to QTextEdit for bulk add)
-        domains_label = QLabel("Domain(s):") # Changed label slightly
-        self.domain_input = QTextEdit() # Changed back to QTextEdit
-        self.domain_input.setPlaceholderText("Enter domains, one per line (e.g., example.com, *.example.net)\n(Note: Editing affects first domain only)") # Update placeholder
+        domains_label = QLabel("Domain/IP(s):") # Changed label
+        self.domain_input = QTextEdit()
+        self.domain_input.setPlaceholderText("Enter domains or IP addresses, one per line\n(e.g., example.com, *.example.net, 192.168.1.100)\n(Note: Editing affects first entry only)") # Update placeholder
         self.domain_input.setAcceptRichText(False)
         self.domain_input.setMinimumHeight(80) # Allow space for multiple lines
         form_layout.addWidget(domains_label)
@@ -98,21 +99,36 @@ class RuleEditWidget(QFrame):
 
         main_layout.addLayout(button_layout)
 
-    def _validate_domain(self, domain: str) -> bool:
-        """Basic domain name validation (allows wildcards at start)."""
-        if not domain: return False
+    def _is_valid_domain_or_ip(self, value: str) -> bool:
+        """Checks if a string is a valid domain name (allowing wildcard start) or a valid IP address."""
+        if not value: return False
+
+        # 1. Check for valid IP address (IPv4 or IPv6)
+        try:
+            ipaddress.ip_address(value)
+            # IP addresses cannot have wildcards or be purely numeric like a TLD might be misinterpreted
+            if '*' in value or '?' in value or value.isdigit():
+                 return False
+            return True # It's a valid IP
+        except ValueError:
+            pass # Not a valid IP, proceed to domain check
+
+        # 2. Check for valid domain name (allowing wildcard start)
         # Allow *. at the start, then standard domain characters
         # Handles Internationalized Domain Names (IDN) with broader character set after initial ASCII check
         # Simple pattern: allows letters, numbers, hyphen, dot, and wildcard start.
-        # More robust validation might be needed depending on requirements.
         pattern = r"^(\*\.)?([a-zA-Z0-9](?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$"
         # Basic check for common invalid patterns
-        if ".." in domain or domain.endswith("-") or domain.startswith("-"):
+        if ".." in value or value.endswith("-") or value.startswith("-") or value.endswith("."):
              return False
-        return bool(re.match(pattern, domain, re.IGNORECASE)) # Ignore case for matching
+        # Prevent purely numeric domains mistaken for IPs without dots
+        if value.isdigit():
+            return False
+
+        return bool(re.match(pattern, value, re.IGNORECASE)) # Ignore case for matching
 
     def _on_save(self):
-        """Validate input and emit save signal with list of domains."""
+        """Validate input and emit save signal with list of domains/IPs."""
         domains_text = self.domain_input.toPlainText().strip()
         selected_proxy_index = self.proxy_combo.currentIndex()
         selected_proxy_id = self.proxy_combo.itemData(selected_proxy_index)
@@ -125,47 +141,50 @@ class RuleEditWidget(QFrame):
             return
 
         # Split by comma, space, newline, semicolon and filter empty strings
-        raw_domains = [d.strip() for d in re.split(r'[,\s\n;]+', domains_text) if d.strip()]
+        raw_entries = [d.strip() for d in re.split(r'[,\s\n;]+', domains_text) if d.strip()]
 
-        valid_domains = []
-        invalid_domains = []
+        valid_entries = []
+        invalid_entries = []
 
-        # Validate and filter domains
-        for domain in raw_domains:
+        # Validate and filter entries
+        for entry in raw_entries:
             # Basic cleanup: remove http(s):// prefix if present
-            if domain.startswith("http://"): domain = domain[7:]
-            if domain.startswith("https://"): domain = domain[8:]
+            if entry.startswith("http://"): entry = entry[7:]
+            if entry.startswith("https://"): entry = entry[8:]
             # Remove trailing slashes or paths
-            domain = domain.split('/')[0]
+            entry = entry.split('/')[0]
+            # Remove port if present (common when copying from browser)
+            entry = entry.split(':')[0]
 
-            if self._validate_domain(domain):
-                # Add domain in lowercase to avoid case sensitivity issues later
-                domain_lower = domain.lower()
-                if domain_lower not in valid_domains:
-                    valid_domains.append(domain_lower)
+            if self._is_valid_domain_or_ip(entry):
+                # Add entry in lowercase to avoid case sensitivity issues later
+                # IP addresses are case-insensitive anyway
+                entry_lower = entry.lower()
+                if entry_lower not in valid_entries:
+                    valid_entries.append(entry_lower)
             else:
-                invalid_domains.append(domain) # Show original invalid input
+                invalid_entries.append(entry) # Show original invalid input
 
-        if invalid_domains:
-             error_msg = f"Invalid domain format for:\n - " + "\n - ".join(invalid_domains)
+        if invalid_entries:
+             error_msg = f"Invalid domain or IP format for:\n - " + "\n - ".join(invalid_entries)
              QMessageBox.warning(self, "Input Error", error_msg)
              self.domain_input.setFocus()
              return
-        if not valid_domains:
-            # This might happen if only invalid domains were entered
-            QMessageBox.warning(self, "Input Error", "No valid domains entered after cleanup.")
+        if not valid_entries:
+            # This might happen if only invalid entries were entered
+            QMessageBox.warning(self, "Input Error", "No valid domains or IP addresses entered after cleanup.")
             self.domain_input.setFocus()
             return
 
-        # If editing, only allow saving if exactly one domain is present
-        if self._editing_rule_id and len(valid_domains) > 1:
-             QMessageBox.warning(self, "Input Error", "Cannot edit multiple domains at once. Please enter only one domain when editing.")
+        # If editing, only allow saving if exactly one entry is present
+        if self._editing_rule_id and len(valid_entries) > 1:
+             QMessageBox.warning(self, "Input Error", "Cannot edit multiple domains/IPs at once. Please enter only one entry when editing.")
              self.domain_input.setFocus()
              return
 
-        # Emit signal with list of valid domains, proxy ID, and profile ID
-        print(f"[Rule Edit Save] Emitting save_rules with domains: {valid_domains}")
-        self.save_rules.emit(valid_domains, selected_proxy_id, selected_profile_id)
+        # Emit signal with list of valid entries, proxy ID, and profile ID
+        print(f"[Rule Edit Save] Emitting save_rules with entries: {valid_entries}")
+        self.save_rules.emit(valid_entries, selected_proxy_id, selected_profile_id)
 
     def update_proxies(self, available_proxies: dict):
         """Updates the list of proxies in the dropdown."""
@@ -192,16 +211,23 @@ class RuleEditWidget(QFrame):
         current_data = self.profile_combo.currentData()
         self.profile_combo.blockSignals(True)
         self.profile_combo.clear()
-        # Profile selection should allow assigning to "None" (All Rules / Default)
-        print(f"[RuleEditWidget] Adding profile item: '{self.main_window.ALL_RULES_PROFILE_NAME}' (Data: None)") # Debug print
-        self.profile_combo.addItem(self.main_window.ALL_RULES_PROFILE_NAME, None) # Use main window constant name
+
+        if not available_profiles:
+             print("[RuleEditWidget] No profiles available to populate.")
+             self.profile_combo.blockSignals(False)
+             return
+
         sorted_profiles = sorted(available_profiles.items(), key=lambda item: item[1].get('name', '').lower())
         for profile_id, profile_data in sorted_profiles:
             name = profile_data.get('name', f"Profile {profile_id[:6]}...")
             print(f"[RuleEditWidget] Adding profile item: '{name}' (Data: {profile_id})") # Debug print
             self.profile_combo.addItem(name, profile_id)
+
         index_to_select = self.profile_combo.findData(current_data)
-        self.profile_combo.setCurrentIndex(max(0, index_to_select)) # Default to "All" if not found
+        if index_to_select == -1: # If current data not found or was None
+            index_to_select = 0 # Default to the first profile in the list
+        self.profile_combo.setCurrentIndex(index_to_select)
+
         print(f"[RuleEditWidget] Profile combo count after update: {self.profile_combo.count()}") # Debug print
         self.profile_combo.blockSignals(False)
 
@@ -210,17 +236,18 @@ class RuleEditWidget(QFrame):
         self._editing_rule_id = rule_data.get("id")
         domain = rule_data.get("domain", "") # Load only the specific domain being edited
         proxy_id = rule_data.get("proxy_id")
-        profile_id = rule_data.get("profile_id")
+        profile_id = rule_data.get("profile_id") # Should always be a valid ID now
 
         self.domain_input.setPlainText(domain) # Set text in QTextEdit
         self.domain_input.setReadOnly(False) # Domain editing is allowed (but save checks for single domain)
 
         # Select Proxy
         proxy_idx = self.proxy_combo.findData(proxy_id)
-        self.proxy_combo.setCurrentIndex(max(0, proxy_idx))
+        self.proxy_combo.setCurrentIndex(max(0, proxy_idx)) # Defaults to Direct if proxy_id is None or not found
 
         # Select Profile
-        profile_idx = self.profile_combo.findData(profile_id) # Find by ID (None for 'All')
+        profile_idx = self.profile_combo.findData(profile_id) # Find by ID
+        # ---> Default to first profile if loaded profile_id is somehow invalid <---
         self.profile_combo.setCurrentIndex(max(0, profile_idx))
 
     def clear_fields(self):
@@ -228,8 +255,8 @@ class RuleEditWidget(QFrame):
         self._editing_rule_id = None
         self.domain_input.clear()
         self.domain_input.setReadOnly(False)
-        self.proxy_combo.setCurrentIndex(0)
-        self.profile_combo.setCurrentIndex(0) # Default to "All"
+        self.proxy_combo.setCurrentIndex(0) # Default to Direct
+        self.profile_combo.setCurrentIndex(0) # Default to first profile
 
     def set_focus_on_domains(self):
         """Set focus to the domains input field."""

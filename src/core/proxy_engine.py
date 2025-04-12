@@ -450,14 +450,13 @@ class ProxyEngine(QObject):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._is_active = False
-        self._rules = {}
         self._proxies = {}
         self.rule_matcher = RuleMatcher()
         self._lock = threading.Lock()
         self._tcp_server = None
         self._server_thread = None
         self.listening_port = DEFAULT_LISTENING_PORT
-        self.active_profile_id = None
+        self.active_profile_id = None # Store active ID used by matcher
 
         # --- Network Interception ---
         # The current implementation uses socketserver to create an explicit proxy
@@ -476,37 +475,51 @@ class ProxyEngine(QObject):
     def is_active(self):
         return self._is_active
 
-    def update_config(self, rules: dict, proxies: dict, active_profile_id: str):
-        """Updates the rules and proxies used by the engine."""
-        self.proxies = proxies
-        self.active_profile_id = active_profile_id # Store the profile ID for reference
+    def update_config(self, all_rules: dict, proxies: dict, active_profile_id: str):
+        """
+        Updates the engine's proxies and filters rules for the RuleMatcher
+        based on the currently active profile ID.
+        """
+        with self._lock: # Protect access to shared resources if needed
+            self._proxies = proxies.copy() # Update internal proxy copy for handlers
+            self.active_profile_id = active_profile_id # Store the active profile
 
-        # Update internal state used by handlers if needed (assuming handlers access self.engine._proxies etc.)
-        # Add lock if these are accessed by handler threads
-        with self._lock: # Use the lock defined in __init__
-             self._proxies = proxies.copy() # Update internal copy for handlers
-             self._rules = rules.copy()     # Update internal copy for handlers
+            # Filter rules for the active profile
+            active_rules = {
+                rule_id: rule_data for rule_id, rule_data in all_rules.items()
+                if rule_data.get('profile_id') == active_profile_id and rule_data.get('enabled', True) # Only consider enabled rules
+            }
 
-        print(f"[Engine] Updating config. Received {len(rules)} rules and {len(proxies)} proxies for profile '{active_profile_id}'.")
-        self.rule_matcher.update_rules(rules) # Pass the original rules dict to the matcher
-        print(f"[Engine] Configuration updated. Matcher has {self.rule_matcher.rule_count()} rules.") # <- Ensure no underscore here
-        # Optionally, inform the user if the engine needs a restart for certain changes
-        # print("[Engine] Note: Restart engine (toggle off/on) might be needed for fundamental changes.")
+        print(f"[Engine] Updating config for active profile '{active_profile_id}'.")
+        print(f"[Engine] Received {len(all_rules)} total rules, filtered to {len(active_rules)} active rules.")
+        print(f"[Engine] Received {len(proxies)} proxies.")
+
+        # Update the rule matcher with only the active profile's rules
+        self.rule_matcher.update_rules(active_rules)
+        print(f"[Engine] Configuration updated. Matcher has {self.rule_matcher.rule_count()} rules for the active profile.")
 
     def start(self):
         """Starts the proxy engine."""
         if self._is_active: return True
+
+        # ---> Check if an active profile is set before starting <---
+        if not self.active_profile_id:
+             error_msg = "Failed to start: No active profile set in engine."
+             print(f"[Engine] Error: {error_msg}")
+             self.error_occurred.emit(error_msg)
+             self.status_changed.emit("error")
+             return False
+
         print("[Engine] Starting...")
-        self.status_changed.emit("starting") # Emit 'starting' status
-        # Update rule matcher with the *current* internal rules before starting
-        with self._lock:
-            # Pass the engine's internal copy of rules to the matcher
-            self.rule_matcher.update_rules(self._rules) # Ensure matcher uses the locked copy
-            if not self._rules: print("[Engine] Warning: Starting with no rules defined.")
+        self.status_changed.emit("starting")
+
+        # The rule matcher should have been updated via update_config already
+        if self.rule_matcher.rule_count() == 0:
+             print(f"[Engine] Warning: Starting with no rules enabled for active profile '{self.active_profile_id}'.")
 
         try:
             ProxyRequestHandler.engine = self
-            print(f"[Engine] Starting TCP server on port {self.listening_port}...")
+            print(f"[Engine] Starting TCP server on port {self.listening_port} for profile '{self.active_profile_id}'...")
             self._tcp_server = ThreadingTCPServer(("", self.listening_port), ProxyRequestHandler)
             self._tcp_server.engine_instance = self # Pass engine reference to server
             self._server_thread = threading.Thread(target=self._tcp_server.serve_forever, daemon=True)
@@ -581,11 +594,19 @@ class ProxyEngine(QObject):
         """The actual test logic performed in a thread."""
         is_ok = False
         error_msg = "Unknown error"
+        proxy_info = None # Initialize
+
+        # ---> Add Debug Logging <---
+        print(f"[Proxy Test Thread {proxy_id}] Acquiring lock to get proxy info...")
         with self._lock: # Get proxy info under lock
+            print(f"[Proxy Test Thread {proxy_id}] Lock acquired. Current engine proxies: {list(self._proxies.keys())}")
             proxy_info = self._proxies.get(proxy_id)
+            print(f"[Proxy Test Thread {proxy_id}] Retrieved proxy_info: {'Found' if proxy_info else 'Not Found'}")
+        # ---> End Debug Logging <---
 
         if not proxy_info:
-            print(f"[Proxy Test {proxy_id}] Error: Proxy info not found.")
+            # Log changed to error level for clarity
+            print(f"[Proxy Test {proxy_id}] Error: Proxy info not found for ID '{proxy_id}'.")
             self.proxy_test_result.emit(proxy_id, False)
             return
 

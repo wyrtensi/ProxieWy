@@ -7,25 +7,27 @@ import winreg # Added import for Windows registry access
 import ctypes # Added import for ctypes
 from ctypes import wintypes # Added import for ctypes
 import re
-from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QAction, QKeySequence, QShortcut # Added QPainter
+from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QAction, QKeySequence, QShortcut, QActionGroup # Added QPainter, QKeySequence
 from PySide6.QtCore import (Qt, QSize, QSettings, QByteArray, QFile, QTextStream, Signal, QTimer, QPropertyAnimation, QEasingCurve, QParallelAnimationGroup, QStandardPaths,
-                           QRect, QPoint, QEvent) # Added QSize
+                           QRect, QPoint, QEvent, QAbstractAnimation) # Added QSize
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QStackedWidget, QSizePolicy, QSystemTrayIcon, QMenu, QApplication,
-    QComboBox, QSpacerItem, QScrollArea, QToolButton, QCheckBox, QFormLayout, QKeySequenceEdit, QInputDialog, QMessageBox, QLineEdit, QTextEdit # Added QLineEdit, QTextEdit
+    QComboBox, QSpacerItem, QScrollArea, QToolButton, QCheckBox, QFormLayout, QKeySequenceEdit, QInputDialog, QMessageBox, QLineEdit, QTextEdit, QDialogButtonBox, QDialog, QListWidgetItem, QListWidget, QGraphicsOpacityEffect, QAbstractItemView # <<< Change CustomListWidget to QListWidget
 )
 from PySide6.QtSvg import QSvgRenderer # Added QSvgRenderer
 import subprocess # Add subprocess
+import time # Added import for time.sleep
 
 # Import new widgets using relative paths
 from .widgets.proxy_item_widget import ProxyItemWidget
 from .widgets.proxy_edit_widget import ProxyEditWidget
 from .widgets.rule_item_widget import RuleItemWidget # Added
 from .widgets.rule_edit_widget import RuleEditWidget # Added
-
+from .widgets.quick_rule_add_dialog import QuickRuleAddDialog
 # Import Core components using relative paths
 from ..core.proxy_engine import ProxyEngine # <<< Changed to relative import
+from ..core.hotkey_manager import IS_WINDOWS, HotkeyManager # <<< Import HotkeyManager
 # RuleMatcher will likely be used internally by the engine, but good to have the file
 
 # Get base paths reliably
@@ -35,19 +37,29 @@ IMAGES_DIR = os.path.join(ASSETS_DIR, 'images')
 ICONS_DIR = os.path.join(ASSETS_DIR, 'icons') # Added Icons Dir
 STYLES_DIR = os.path.join(ASSETS_DIR, 'styles') # Added
 
-# Icon Paths - Make sure these files exist in src/assets/images/
+# Icon Paths - Make sure these files exist in src/assets/images/ and src/assets/icons/
 MAIN_ICON_PATH = os.path.join(IMAGES_DIR, "icon.png")
 TRAY_ICON_INACTIVE_PATH = os.path.join(IMAGES_DIR, "icon_inactive.png")
 TRAY_ICON_ACTIVE_PATH = os.path.join(IMAGES_DIR, "icon_active.png")
 TRAY_ICON_ERROR_PATH = os.path.join(IMAGES_DIR, "icon_error.png")
+# --- Corrected Toggle Icon Paths ---
+TOGGLE_ON_ICON_PATH = os.path.join(ICONS_DIR, "toggle-right.svg") # Use toggle-right for ON
+TOGGLE_OFF_ICON_PATH = os.path.join(ICONS_DIR, "toggle-left.svg")  # Use toggle-left for OFF
+TOGGLE_ERROR_ICON_PATH = os.path.join(ICONS_DIR, "toggle-left.svg") # Use toggle-left for ERROR state as well
+# --- End Correction ---
 
 # SVG Icon Paths
 RULES_ICON_PATH = os.path.join(ICONS_DIR, "rules.svg")
 PROXIES_ICON_PATH = os.path.join(ICONS_DIR, "proxies.svg")
 SETTINGS_ICON_PATH = os.path.join(ICONS_DIR, "settings.svg")
 ADD_ICON_PATH = os.path.join(ICONS_DIR, "plus.svg")
-TOGGLE_OFF_ICON_PATH = os.path.join(ICONS_DIR, "toggle-left.svg") # e.g., Feather Icons
-TOGGLE_ON_ICON_PATH = os.path.join(ICONS_DIR, "toggle-right.svg") # e.g., Feather Icons
+CLEAR_ICON_PATH = os.path.join(ICONS_DIR, "x.svg") # For clear button if needed
+FOLDER_ICON_PATH = os.path.join(ICONS_DIR, "folder.svg")
+RESET_ICON_PATH = os.path.join(ICONS_DIR, "reset.svg")
+SAVE_ICON_PATH = os.path.join(ICONS_DIR, "save.svg")
+CANCEL_ICON_PATH = os.path.join(ICONS_DIR, "x-circle.svg")
+EDIT_ICON_PATH = os.path.join(ICONS_DIR, "edit.svg")
+DELETE_ICON_PATH = os.path.join(ICONS_DIR, "trash.svg")
 
 # Stylesheet Paths
 DARK_THEME_PATH = os.path.join(STYLES_DIR, "dark.qss")
@@ -176,6 +188,16 @@ class MainWindow(QMainWindow):
         if os.path.exists(MAIN_ICON_PATH):
             self.setWindowIcon(QIcon(MAIN_ICON_PATH))
 
+        # ---> Load Tray Icons Early <---
+        self.icon_active = QIcon(TRAY_ICON_ACTIVE_PATH) if os.path.exists(TRAY_ICON_ACTIVE_PATH) else QIcon(MAIN_ICON_PATH)
+        self.icon_inactive = QIcon(TRAY_ICON_INACTIVE_PATH) if os.path.exists(TRAY_ICON_INACTIVE_PATH) else QIcon(MAIN_ICON_PATH)
+        self.icon_error = QIcon(TRAY_ICON_ERROR_PATH) if os.path.exists(TRAY_ICON_ERROR_PATH) else QIcon(MAIN_ICON_PATH)
+        # Check if fallback main icon exists
+        if not os.path.exists(MAIN_ICON_PATH):
+             print("Warning: Main application icon not found, tray icons might be missing.")
+             # Use default Qt icon as ultimate fallback?
+             # self.icon_active = self.icon_inactive = self.icon_error = QIcon() # Or leave as potentially invalid QIcon(MAIN_ICON_PATH)
+
         # --- Define Settings File Path ---
         # Use standard config location
         config_dir = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppConfigLocation)
@@ -185,120 +207,58 @@ class MainWindow(QMainWindow):
         print(f"Using settings file: {self.settings_file}")
         # --- End Settings File Path ---
 
-        # Data Stores (Initialize before load_settings)
+        # Data Stores (Initialize early)
         self.sidebar_buttons = []
         self.current_theme = 'dark'
         self.proxies = {}
         self.proxy_widgets = {}
         self.rules = {}
         self.rule_widgets = {}
-        self.profiles = {"__default__": {"name": "Default"}} # Initialize with default
-        self.active_profile_id = "__default__" # Default active
-        self.engine_active_profile_id = "__default__" # Default engine active
+        self.profiles = {} # Initialize empty, load_settings will handle default
+        self._current_active_profile_id = None # Initialize profile ID
 
-        self.ALL_RULES_PROFILE_ID = "__all__"
-        self.ALL_RULES_PROFILE_NAME = "All Rules (Default)"
-
-        self.proxy_engine = ProxyEngine(self)
         self.proxy_editor_animation = None
         self.rule_editor_animation = None
-        # Track close behavior
         self.close_behavior = "minimize" # Default
         self._force_quit = False # Flag for actual quit action
 
+        # Initialize Core Components (Needed before connections)
+        self.proxy_engine = ProxyEngine()
+        self.hotkey_manager = HotkeyManager()
+        
+        # Flag to track if we're in the middle of a profile switch
+        self._is_switching_profiles = False
+
+        # Create UI Elements FIRST
         self._create_widgets()
         self._create_layouts()
-        self._create_connections()
+        # ---> Create Tray Icon BEFORE Connecting Signals <---
         self._create_tray_icon()
+        # ---> Now connect signals/slots <---
+        self._create_connections()
 
+        # Load settings AFTER UI widgets are created AND connections established
+        self.load_settings() # Load profiles, rules, proxies, UI state etc.
+
+        # Apply initial UI state based on loaded settings
+        self._update_profile_selectors() # Populate selectors with loaded profiles/active ID
+        self._populate_proxy_list() # Populate with loaded proxies
+        self._populate_rule_list() # Populate with loaded rules for the active profile
+        self._set_initial_active_view() # Set the correct sidebar view
+
+        # Load and Register Hotkeys (After settings are loaded and connections made)
+        self._load_and_register_hotkeys()
+
+        # Center window after potential size changes from loading settings
         self._center_window()
 
-        # Before calling load_settings
-        self.active_profile_id = "__default__"
-        self.engine_active_profile_id = "__default__"
-
-        self.load_settings() # Load profiles, rules, proxies etc.
-        print(f"[UI Init] Loaded {len(self.rules)} rules from settings.")
-        self._update_profile_selectors() # Populate selectors
-
-        # Set the initial state of the toggle button based on loaded setting *before* potentially starting engine
-        self._update_toggle_button_state("inactive") # Assume inactive initially
-        # Ensure start_engine_checkbox is available before accessing it
-        if hasattr(self, 'start_engine_checkbox'):
-            start_checked = self.start_engine_checkbox.isChecked()
-            print(f"[UI Init] Engine auto-start setting: {start_checked}")
-            # Set button state *without* triggering toggle signal yet
-            self.toggle_proxy_button.blockSignals(True)
-            self.toggle_proxy_button.setChecked(start_checked)
-            self.toggle_proxy_button.blockSignals(False)
-            self._update_toggle_button_state("starting" if start_checked else "inactive") # Update visual icon/tooltip
-
-            # If auto-start is enabled, *now* explicitly call the toggle handler
-            if start_checked:
-                print("[UI Init] Auto-starting engine...")
-                # Use QTimer.singleShot to allow the event loop to process before starting
-                QTimer.singleShot(100, lambda: self._handle_toggle_proxy(True))
-            else:
-                # Ensure engine internal state matches UI if not auto-starting
-                self.proxy_engine.update_config(self.get_active_rules(), self.proxies, self.active_profile_id) # Ensure engine has initial config
-
-        # Populate lists after potentially loading data
-        self._populate_proxy_list()
-        self._populate_rule_list()
-        self._set_initial_active_view()
-
-        # Windows Proxy Init (Moved after load_settings)
-        if platform.system() == "Windows":
-            import winreg
-            import ctypes
-            from ctypes import wintypes
-            self.INTERNET_SETTINGS_KEY = r'Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings'
-            self.INTERNET_OPTION_SETTINGS_CHANGED = 39
-            self.INTERNET_OPTION_REFRESH = 37
-
-            try:
-                 self.InternetSetOptionW = ctypes.windll.Wininet.InternetSetOptionW
-                 self.InternetSetOptionW.argtypes = [wintypes.HINTERNET, wintypes.DWORD, wintypes.LPVOID, wintypes.DWORD]
-                 self.InternetSetOptionW.restype = wintypes.BOOL
-                 print("[WinProxy] Successfully loaded InternetSetOptionW.")
-            except AttributeError:
-                 print("[WinProxy] Warning: wininet.dll or InternetSetOptionW not found. Cannot refresh system proxy settings automatically.")
-                 self.InternetSetOptionW = None
-        else:
-            self.InternetSetOptionW = None
-
-    def get_active_rules(self) -> dict:
-        """
-        Returns rules for the currently active engine profile,
-        INCLUDING rules assigned to 'All' (profile_id=None).
-        """
-        target_profile_id = self.engine_active_profile_id
-        print(f"[UI Rules] Getting rules for engine profile: '{target_profile_id}'")
-
-        active_rules = {}
-        # Always include rules with profile_id=None (Global/Default rules)
-        for rule_id, rule_data in self.rules.items():
-            if not rule_data.get("profile_id"): # Check if profile_id is None or empty
-                active_rules[rule_id] = rule_data
-
-        # If a specific profile is active (not None or __all__), add its rules
-        if target_profile_id and target_profile_id != self.ALL_RULES_PROFILE_ID:
-            print(f"[UI Rules] Additionally including rules specifically for profile '{target_profile_id}'.")
-            for rule_id, rule_data in self.rules.items():
-                if rule_data.get("profile_id") == target_profile_id:
-                    # Avoid adding duplicates if already added as a global rule (though shouldn't happen with UUIDs)
-                    if rule_id not in active_rules:
-                        active_rules[rule_id] = rule_data
-        # If target profile is __all__ or None, we already added all rules implicitly via the first loop if logic demands it
-        # However, the first loop adding profile_id=None covers the 'global' aspect better.
-        # Let's refine: If target is '__all__', just return everything.
-        elif not target_profile_id or target_profile_id == self.ALL_RULES_PROFILE_ID:
-             print(f"[UI Rules] Engine target profile is 'All', returning all rules.")
-             return self.rules.copy() # Return a copy of all rules
-
-
-        print(f"[UI Rules] Found {len(active_rules)} applicable rules (Globals + Profile Specific) for engine profile '{target_profile_id}'.")
-        return active_rules
+        # Start engine on startup if configured
+        if self.start_engine_checkbox.isChecked():
+            print("[Startup] Auto-starting engine...")
+            # Use a QTimer to allow the event loop to start first
+            QTimer.singleShot(100, lambda: self._handle_toggle_proxy(True))
+            # Note: The system proxy setting will be handled in _handle_toggle_proxy
+            # when engine is started, based on the enable_system_proxy_checkbox state
 
     def _create_widgets(self):
         """Create all the widgets for the main window."""
@@ -307,7 +267,16 @@ class MainWindow(QMainWindow):
         self.sidebar_frame.setObjectName("SidebarFrame")
         self.sidebar_frame.setFixedWidth(60) # Example width
 
-        # Create SVG buttons
+        # ---> ADD Master Toggle Button Creation <---
+        self.toggle_proxy_button = QToolButton()
+        self.toggle_proxy_button.setObjectName("ToggleProxyButton")
+        self.toggle_proxy_button.setCheckable(True) # Make it checkable
+        self.toggle_proxy_button.setFixedSize(40, 40) # Adjust size as needed
+        self.toggle_proxy_button.setIconSize(QSize(28, 28)) # Adjust icon size
+        # Initial icon/tooltip will be set by _update_toggle_button_state via status signals
+        # --- END Toggle Button Creation ---
+
+        # Create SVG buttons for main navigation
         self.nav_button_rules = create_svg_button(object_name="navButtonRules")
         self.nav_button_proxies = create_svg_button(object_name="navButtonProxies")
         self.nav_button_settings = create_svg_button(object_name="navButtonSettings")
@@ -316,19 +285,6 @@ class MainWindow(QMainWindow):
         self.nav_button_rules.setToolTip("Manage Domain Routing Rules")
         self.nav_button_proxies.setToolTip("Manage Proxy Servers")
         self.nav_button_settings.setToolTip("Application Settings")
-
-        # --- Master Toggle Button (e.g., in sidebar or status bar) ---
-        # Let's add it to the top of the sidebar for prominence
-        self.toggle_proxy_button = QToolButton()
-        self.toggle_proxy_button.setObjectName("ToggleProxyButton")
-        self.toggle_proxy_button.setCheckable(True)
-        self.toggle_proxy_button.setIconSize(QSize(32, 32)) # Larger icon
-        self.toggle_proxy_button.setToolTip("Toggle Proxy Engine On/Off")
-        # Set initial icon (off)
-        if os.path.exists(TOGGLE_OFF_ICON_PATH):
-            self.toggle_proxy_button.setIcon(QIcon(TOGGLE_OFF_ICON_PATH))
-        else:
-            self.toggle_proxy_button.setText("Off")
 
         # --- Main Content Area (Stacked Widget) ---
         self.main_content_area = QStackedWidget()
@@ -340,57 +296,78 @@ class MainWindow(QMainWindow):
         rules_page_layout = QVBoxLayout(self.rules_page)
         rules_page_layout.setContentsMargins(0, 0, 0, 0)
         rules_page_layout.setSpacing(0)
+        
+        # --- Top Header Area ---
+        rule_header_container = QWidget()
+        rule_header_container.setObjectName("PageHeaderContainer")
+        rule_header_layout = QHBoxLayout(rule_header_container)
+        rule_header_layout.setContentsMargins(15, 10, 15, 10)
+        rule_header_layout.setSpacing(10)
+        
+        self.rules_title_label = QLabel("All Domain Rules (Active Profile: None)")
+        self.rules_title_label.setObjectName("ViewTitleLabel")
+        rule_header_layout.addWidget(self.rules_title_label, stretch=1) # Allow title to stretch
 
-        # Top Bar (Add Rule Button)
-        rules_top_bar = QHBoxLayout()
-        rules_top_bar.setContentsMargins(15, 10, 15, 10)
-        rules_top_bar.addWidget(QLabel("Profile:    ")) # Simplified label
-        self.rule_profile_selector = QComboBox()
-        self.rule_profile_selector.setObjectName("RuleProfileSelector")
-        self.rule_profile_selector.setToolTip("Select profile to view/add rules") # Updated tooltip
-        rules_top_bar.addWidget(self.rule_profile_selector) # Selector first
-        self.rules_count_label = QLabel("(0 Rules)") # Label to show rule count
-        self.rules_count_label.setObjectName("RuleCountLabel")
-        rules_top_bar.addWidget(self.rules_count_label)
-        rules_top_bar.addStretch()
-        self.add_rule_button = QPushButton("Add Rule(s)")
-        if os.path.exists(ADD_ICON_PATH):
-            self.add_rule_button.setIcon(QIcon(ADD_ICON_PATH))
-        self.add_rule_button.setObjectName("AddRuleButton")
-        self.add_rule_button.clicked.connect(self._show_add_rule_editor)
-        self.add_rule_button.setToolTip("Add new domain rule(s) to the selected profile")
-        rules_top_bar.addWidget(self.add_rule_button)
-        rules_page_layout.addLayout(rules_top_bar)
+        # ---> Change Add Rule Button to QPushButton <---
+        self.add_rule_button = QPushButton("Add Rule") # Changed from _create_tool_button
+        if os.path.exists(ADD_ICON_PATH): # Optionally keep icon
+             self.add_rule_button.setIcon(QIcon(ADD_ICON_PATH))
+        self.add_rule_button.setObjectName("AddRuleButton") # Use this for styling if needed
+        self.add_rule_button.setToolTip("Add new routing rule(s) to the active profile")
+        self.add_rule_button.clicked.connect(self._show_add_rule_editor) # Connect here
+        rule_header_layout.addWidget(self.add_rule_button)
 
-        # ADD RULE FILTER BAR
-        self.rule_filter_bar = self._create_filter_bar("Filter rules (domain, proxy, profile)...", self._filter_rule_list)
-        rules_page_layout.addWidget(self.rule_filter_bar)
+        rules_page_layout.addWidget(rule_header_container)
+        # --- End Rule Header ---
 
-        # Rule Editor
-        self.rule_edit_widget = RuleEditWidget(self, self.proxies, self.profiles)
-        self.rule_edit_widget.setVisible(False)
-        self.rule_edit_widget.setFixedHeight(0) # Start with zero height for animation
+        # --- Rule Editor Placeholder ---
+        self.rule_editor_container = QWidget()
+        self.rule_editor_container.setObjectName("EditorContainer")
+        self.editor_container_layout = QVBoxLayout(self.rule_editor_container)
+        self.editor_container_layout.setContentsMargins(15, 0, 15, 5)
+        self.editor_container_layout.setSpacing(0)
+        # ---> Create Rule Edit Widget Instance Here <---
+        self.rule_edit_widget = RuleEditWidget(self, self.proxies, self.profiles) # Create instance
+        # ---> Add Opacity Effect for Fade Animation <---
+        self.rule_edit_opacity_effect = QGraphicsOpacityEffect(self.rule_edit_widget)
+        self.rule_edit_widget.setGraphicsEffect(self.rule_edit_opacity_effect)
+        self.rule_edit_opacity_effect.setOpacity(0.0) # Start transparent
+        # ---> End Opacity Effect <---
         self.rule_edit_widget.save_rules.connect(self._save_rule_entry)
         self.rule_edit_widget.cancelled.connect(self._cancel_rule_edit)
-        rules_page_layout.addWidget(self.rule_edit_widget)
+        self.editor_container_layout.addWidget(self.rule_edit_widget) # Add to layout
+        self.rule_edit_widget.setVisible(False) # Start hidden
+        self.rule_editor_container.setMaximumHeight(0) # Collapsed initially
+        rules_page_layout.addWidget(self.rule_editor_container)
+        # --- End Editor ---
 
-        # Rule List Area (Scrollable)
-        self.rule_scroll_area = QScrollArea()
-        self.rule_scroll_area.setObjectName("RuleScrollArea")
-        self.rule_scroll_area.setWidgetResizable(True)
-        self.rule_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.rule_scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        # --- Rule Filter Bar ---
+        self.rule_filter_bar = self._create_filter_bar("Filter rules...", self._filter_rule_list, include_count_label=True)
+        rules_page_layout.addWidget(self.rule_filter_bar)
+        # --- End Filter Bar ---
 
-        self.rule_list_container = QWidget()
-        self.rule_list_layout = QVBoxLayout(self.rule_list_container)
-        self.rule_list_layout.setContentsMargins(15, 5, 15, 15)
-        self.rule_list_layout.setSpacing(8)
-        self.rule_list_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        # --- Rule List Area ---
+        # Use QListWidget for rules (temporarily, until CustomListWidget is defined/imported)
+        self.rules_list_widget = QListWidget() # <<< Changed from CustomListWidget
+        self.rules_list_widget.setObjectName("RuleListWidget")
+        # Add styling for item spacing if needed (QSS is better)
+        # self.rules_list_widget.setSpacing(5) # Example spacing
+        rules_page_layout.addWidget(self.rules_list_widget, stretch=1) # List takes remaining space
+        # --- End Rule List ---
 
-        self.rule_scroll_area.setWidget(self.rule_list_container)
-        rules_page_layout.addWidget(self.rule_scroll_area, stretch=1)
+        # Placeholder for empty list
+        self.rules_placeholder_widget = QWidget()
+        placeholder_layout = QVBoxLayout(self.rules_placeholder_widget)
+        placeholder_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        placeholder_label = QLabel("No rules defined in any profile.")
+        placeholder_label.setObjectName("PlaceholderLabel")
+        placeholder_layout.addWidget(placeholder_label)
+        self.rules_placeholder_widget.setVisible(False) # Initially hidden
+        rules_page_layout.addWidget(self.rules_placeholder_widget, stretch=1)
+        rules_page_layout.setStretchFactor(self.rules_list_widget, 1)
+        rules_page_layout.setStretchFactor(self.rules_placeholder_widget, 1)
 
-        # --- Proxies Page (Layout unchanged from previous step) ---
+        # --- Proxies Page ---
         self.proxies_page = QWidget()
         self.proxies_page.setObjectName("ProxiesPage")
         proxies_page_layout = QVBoxLayout(self.proxies_page)
@@ -413,189 +390,179 @@ class MainWindow(QMainWindow):
         proxies_top_bar.addWidget(self.add_proxy_button)
         proxies_page_layout.addLayout(proxies_top_bar)
 
-        # <<< MOVE PROXY FILTER BAR HERE >>>
-        self.proxy_filter_bar = self._create_filter_bar("Filter proxies (name, address, type)...", self._filter_proxy_list)
-        proxies_page_layout.addWidget(self.proxy_filter_bar) # Add filter bar below top bar
+        # ---> Create Proxy Editor CONTAINER <---
+        self.proxy_editor_container = QWidget()
+        self.proxy_editor_container.setObjectName("EditorContainer") # Same name OK? Yes.
+        proxy_editor_container_layout = QVBoxLayout(self.proxy_editor_container)
+        proxy_editor_container_layout.setContentsMargins(15, 0, 15, 5)
+        proxy_editor_container_layout.setSpacing(0)
 
-        # Proxy Editor
-        self.proxy_edit_widget = ProxyEditWidget(self) # Pass main window ref
-        self.proxy_edit_widget.setVisible(False)
-        self.proxy_edit_widget.setFixedHeight(0) # Start with zero height for animation
+        # Create Proxy Edit Widget Instance and add to CONTAINER
+        self.proxy_edit_widget = ProxyEditWidget(self)
         self.proxy_edit_widget.save_proxy.connect(self._save_proxy_entry)
         self.proxy_edit_widget.cancelled.connect(self._cancel_proxy_edit)
-        proxies_page_layout.addWidget(self.proxy_edit_widget)
-        # Proxy List
+        proxy_editor_container_layout.addWidget(self.proxy_edit_widget) # Add EDITOR to CONTAINER layout
+        self.proxy_edit_widget.setVisible(False) # Start hidden
+
+        self.proxy_editor_container.setMaximumHeight(0) # Start CONTAINER collapsed
+        proxies_page_layout.addWidget(self.proxy_editor_container) # Add CONTAINER to PAGE layout
+        # ---> End Proxy Editor Container Setup <---
+
+        # Filter Bar
+        self.proxy_filter_bar = self._create_filter_bar("Filter proxies...", self._filter_proxy_list)
+        proxies_page_layout.addWidget(self.proxy_filter_bar)
+
+        # Proxy List (Scroll Area)
         self.scroll_area = QScrollArea()
         self.scroll_area.setObjectName("ProxyScrollArea")
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
         self.proxy_list_container = QWidget()
+        self.proxy_list_container.setObjectName("ProxyListContainer")
         self.proxy_list_layout = QVBoxLayout(self.proxy_list_container)
-        self.proxy_list_layout.setContentsMargins(15, 5, 15, 15)
-        self.proxy_list_layout.setSpacing(8)
-        self.proxy_list_layout.setAlignment(Qt.AlignmentFlag.AlignTop) # Keep AlignTop
+        self.proxy_list_layout.setContentsMargins(15, 0, 15, 15) # Margin at bottom
+        self.proxy_list_layout.setSpacing(5)
+        self.proxy_list_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.scroll_area.setWidget(self.proxy_list_container)
-        proxies_page_layout.addWidget(self.scroll_area, stretch=1)
+        proxies_page_layout.addWidget(self.scroll_area)
+        # --- End Proxies Page ---
 
-        # <<< REMOVE PROXY FILTER BAR FROM HERE >>>
-        # self.proxy_filter_bar = self._create_filter_bar("Filter proxies (name, address, type)...", self._filter_proxy_list)
-        # proxies_page_layout.addWidget(self.proxy_filter_bar)
-
-        # --- Settings Page (Layout unchanged) ---
+        # --- Settings Page ---
         self.settings_page = QWidget()
-        self.settings_page.setObjectName("SettingsPage")
-        settings_layout = QVBoxLayout(self.settings_page)
-        settings_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter) # Align top-center
+        settings_page_layout = QVBoxLayout(self.settings_page)
+        settings_page_layout.setContentsMargins(15, 10, 15, 10)
+        settings_page_layout.setSpacing(15)
 
-        # Create a container widget for settings content to control width
+        # Use QScrollArea for settings content if it gets long
+        settings_scroll = QScrollArea()
+        settings_scroll.setWidgetResizable(True)
+        settings_scroll.setObjectName("SettingsScrollArea")
+        settings_scroll.setFrameShape(QFrame.Shape.NoFrame)
         settings_content_widget = QWidget()
-        settings_content_layout = QVBoxLayout(settings_content_widget)
-        settings_content_layout.setContentsMargins(15, 15, 15, 15) # Padding inside the content
-        settings_content_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        # Optional: Limit the width of the settings content
-        settings_content_widget.setMaximumWidth(450) # Example max width
+        # ---> Set object name for QSS targeting <---
+        settings_content_widget.setObjectName("settings_content_widget")
+        settings_form_layout = QVBoxLayout(settings_content_widget) # Main layout for settings content
+        settings_form_layout.setSpacing(10)
 
-        # Theme Switcher
-        theme_label = QLabel("Theme:")
-        self.theme_combo = QComboBox()
-        self.theme_combo.setObjectName("ThemeComboBox")
-        self.theme_combo.addItems(["Dark", "Light"])
-        self.theme_combo.setToolTip("Select the application theme")
+        # --- General Settings ---
+        general_group_label = QLabel("<b>General</b>")
+        settings_form_layout.addWidget(general_group_label)
+
         theme_layout = QHBoxLayout()
-        theme_layout.addWidget(theme_label)
+        theme_layout.addWidget(QLabel("Theme:"))
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItems(["Dark", "Light"])
         theme_layout.addWidget(self.theme_combo)
         theme_layout.addStretch()
-        settings_content_layout.addLayout(theme_layout)
-        settings_content_layout.addSpacing(15)
+        settings_form_layout.addLayout(theme_layout)
 
-        # Close Button Behavior
-        self.close_to_tray_checkbox = QCheckBox("Minimize to tray on close (instead of exiting)")
+        self.close_to_tray_checkbox = QCheckBox("Minimize to system tray on close")
         self.close_to_tray_checkbox.setObjectName("CloseToTrayCheckbox")
-        self.close_to_tray_checkbox.setToolTip("If unchecked, closing the window will exit the application.")
-        settings_content_layout.addWidget(self.close_to_tray_checkbox)
-        # Removed default checked state, load_settings handles it
+        settings_form_layout.addWidget(self.close_to_tray_checkbox)
 
-        # Engine Startup Setting
-        self.start_engine_checkbox = QCheckBox("Enable proxy engine on application startup")
+        self.start_engine_checkbox = QCheckBox("Start proxy engine on application startup")
         self.start_engine_checkbox.setObjectName("StartEngineCheckbox")
-        settings_content_layout.addWidget(self.start_engine_checkbox)
-        settings_content_layout.addSpacing(20)
+        settings_form_layout.addWidget(self.start_engine_checkbox)
 
-        # Profile Management Section
-        profile_label = QLabel("Profiles:")
-        profile_label.setObjectName("SettingsHeaderLabel")
-        settings_content_layout.addWidget(profile_label)
-        profile_management_layout = QHBoxLayout()
-        self.profile_list_widget = QComboBox()
-        self.profile_list_widget.setObjectName("ProfileListCombo")
-        self.profile_list_widget.setToolTip("Select profile to manage")
-        self.add_profile_button = QPushButton("Add")
-        self.add_profile_button.setObjectName("AddProfileButton")
-        self.add_profile_button.setToolTip("Add a new profile")
-        self.rename_profile_button = QPushButton("Rename")
-        self.rename_profile_button.setObjectName("RenameProfileButton")
-        self.rename_profile_button.setToolTip("Rename selected profile")
-        self.delete_profile_button = QPushButton("Delete")
-        self.delete_profile_button.setObjectName("DeleteProfileButton")
-        self.delete_profile_button.setToolTip("Delete selected profile")
-        profile_management_layout.addWidget(self.profile_list_widget, stretch=1)
-        profile_management_layout.addWidget(self.add_profile_button)
-        profile_management_layout.addWidget(self.rename_profile_button)
-        profile_management_layout.addWidget(self.delete_profile_button)
-        settings_content_layout.addLayout(profile_management_layout)
-        settings_content_layout.addSpacing(20)
+        # System Proxy (Windows Only)
+        if IS_WINDOWS:
+            self.enable_system_proxy_checkbox = QCheckBox("Set as system proxy when engine is active")
+            self.enable_system_proxy_checkbox.setToolTip("Automatically configure Windows proxy settings (requires admin rights potentially)")
+            self.enable_system_proxy_checkbox.setObjectName("SystemProxyCheckbox")
+            settings_form_layout.addWidget(self.enable_system_proxy_checkbox)
 
+        settings_form_layout.addWidget(self._create_separator())
 
-        # Hotkey Settings
-        hotkey_label = QLabel("Global Hotkeys (Requires Restart):")
-        hotkey_label.setObjectName("SettingsHeaderLabel")
-        hotkey_label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
-        settings_content_layout.addWidget(hotkey_label)
-        hotkey_form_layout = QFormLayout()
-        hotkey_form_layout.setContentsMargins(10, 5, 10, 5) # Indent form
-        hotkey_form_layout.setSpacing(8)
-        hotkey_form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        # --- Profiles Settings ---
+        profiles_group_layout = QHBoxLayout()
+        profiles_group_label = QLabel("<b>Profiles</b>")
+        profiles_group_layout.addWidget(profiles_group_label)
+        profiles_group_layout.addStretch()
+
+        # ---> Change Profile Buttons to QPushButton with text <---
+        self.add_profile_button = QPushButton(" Add") # Changed from tool button
+        self.add_profile_button.setToolTip("Add New Profile")
+        self.add_profile_button.setObjectName("SettingsButton") # General settings button style
+
+        self.rename_profile_button = QPushButton(" Rename") # Changed from tool button
+        self.rename_profile_button.setToolTip("Rename Selected Profile")
+        self.rename_profile_button.setObjectName("SettingsButton")
+
+        self.delete_profile_button = QPushButton(" Delete") # Changed from tool button
+        self.delete_profile_button.setToolTip("Delete Selected Profile")
+        self.delete_profile_button.setObjectName("DangerButton") # Keep danger style if defined
+
+        profiles_group_layout.addWidget(self.add_profile_button)
+        profiles_group_layout.addWidget(self.rename_profile_button)
+        profiles_group_layout.addWidget(self.delete_profile_button)
+        settings_form_layout.addLayout(profiles_group_layout)
+        # Connections are done in _create_connections
+
+        # ---> Create self.profile_list_widget as QListWidget <---
+        self.profile_list_widget = QListWidget()
+        self.profile_list_widget.setObjectName("ProfileListWidget")
+        self.profile_list_widget.setMaximumHeight(150) # Limit height
+        settings_form_layout.addWidget(self.profile_list_widget)
+
+        settings_form_layout.addWidget(self._create_separator())
+
+        # --- Hotkeys Settings ---
+        hotkeys_group_label = QLabel("<b>Global Hotkeys</b>")
+        settings_form_layout.addWidget(hotkeys_group_label)
+        hotkeys_form = QFormLayout()
+        hotkeys_form.setSpacing(8)
+        hotkeys_form.setContentsMargins(10,0,0,0) # Indent hotkey form
 
         self.toggle_hotkey_edit = QKeySequenceEdit()
-        self.toggle_hotkey_edit.setObjectName("ToggleHotkeyEdit")
-        self.toggle_hotkey_edit.setToolTip("Set global hotkey to toggle the proxy engine on/off")
-        toggle_hotkey_clear_btn = QToolButton()
-        toggle_hotkey_clear_btn.setText("Clear") # Or use an icon
-        toggle_hotkey_clear_btn.setObjectName("ClearHotkeyButton")
-        toggle_hotkey_clear_btn.setToolTip("Clear Toggle Proxy hotkey")
-        toggle_hotkey_clear_btn.clicked.connect(lambda: self._clear_hotkey(self.toggle_hotkey_edit))
-        toggle_hotkey_layout = QHBoxLayout()
-        toggle_hotkey_layout.setContentsMargins(0,0,0,0)
-        toggle_hotkey_layout.addWidget(self.toggle_hotkey_edit, stretch=1)
-        toggle_hotkey_layout.addWidget(toggle_hotkey_clear_btn)
-        hotkey_form_layout.addRow("Toggle Proxy Engine:", toggle_hotkey_layout) # Add layout instead of just edit
-
-        # Show/Hide Window Hotkey
         self.show_hide_hotkey_edit = QKeySequenceEdit()
-        self.show_hide_hotkey_edit.setObjectName("ShowHideHotkeyEdit")
-        self.show_hide_hotkey_edit.setToolTip("Set global hotkey to show/hide the application window")
-        show_hide_hotkey_clear_btn = QToolButton()
-        show_hide_hotkey_clear_btn.setText("Clear") # Or use an icon
-        show_hide_hotkey_clear_btn.setObjectName("ClearHotkeyButton")
-        show_hide_hotkey_clear_btn.setToolTip("Clear Show/Hide Window hotkey")
-        show_hide_hotkey_clear_btn.clicked.connect(lambda: self._clear_hotkey(self.show_hide_hotkey_edit))
-        show_hide_hotkey_layout = QHBoxLayout()
-        show_hide_hotkey_layout.setContentsMargins(0,0,0,0)
-        show_hide_hotkey_layout.addWidget(self.show_hide_hotkey_edit, stretch=1)
-        show_hide_hotkey_layout.addWidget(show_hide_hotkey_clear_btn)
-        hotkey_form_layout.addRow("Show/Hide Window:", show_hide_hotkey_layout) # Add layout
-
-        # Add Next/Previous Profile Hotkeys
         self.next_profile_hotkey_edit = QKeySequenceEdit()
-        self.next_profile_hotkey_edit.setObjectName("NextProfileHotkeyEdit")
-        self.next_profile_hotkey_edit.setToolTip("Set global hotkey to switch to the next profile")
-        next_profile_clear_btn = QToolButton(); next_profile_clear_btn.setText("Clear"); next_profile_clear_btn.setObjectName("ClearHotkeyButton")
-        next_profile_clear_btn.setToolTip("Clear Next Profile hotkey")
-        next_profile_clear_btn.clicked.connect(lambda: self._clear_hotkey(self.next_profile_hotkey_edit))
-        next_profile_layout = QHBoxLayout(); next_profile_layout.setContentsMargins(0,0,0,0)
-        next_profile_layout.addWidget(self.next_profile_hotkey_edit, stretch=1); next_profile_layout.addWidget(next_profile_clear_btn)
-        hotkey_form_layout.addRow("Next Profile:", next_profile_layout) # Add layout
-
         self.prev_profile_hotkey_edit = QKeySequenceEdit()
-        self.prev_profile_hotkey_edit.setObjectName("PrevProfileHotkeyEdit")
-        self.prev_profile_hotkey_edit.setToolTip("Set global hotkey to switch to the previous profile")
-        prev_profile_clear_btn = QToolButton(); prev_profile_clear_btn.setText("Clear"); prev_profile_clear_btn.setObjectName("ClearHotkeyButton")
-        prev_profile_clear_btn.setToolTip("Clear Previous Profile hotkey")
-        prev_profile_clear_btn.clicked.connect(lambda: self._clear_hotkey(self.prev_profile_hotkey_edit))
-        prev_profile_layout = QHBoxLayout(); prev_profile_layout.setContentsMargins(0,0,0,0)
-        prev_profile_layout.addWidget(self.prev_profile_hotkey_edit, stretch=1); prev_profile_layout.addWidget(prev_profile_clear_btn)
-        hotkey_form_layout.addRow("Previous Profile:", prev_profile_layout) # Add layout
+        self.quick_add_rule_hotkey_edit = QKeySequenceEdit()
 
-        settings_content_layout.addLayout(hotkey_form_layout)
-        # Updated note
-        hotkey_note = QLabel("<small><i>Note: Setting hotkeys here saves the preference. Actual global registration requires additional setup and platform-specific libraries (not currently implemented).</i></small>")
-        hotkey_note.setWordWrap(True)
-        settings_content_layout.addWidget(hotkey_note)
-        settings_content_layout.addSpacing(20)
+        # Create clear buttons
+        clear_toggle_btn = self._create_clear_hotkey_button(self.toggle_hotkey_edit, "Toggle Engine")
+        clear_show_hide_btn = self._create_clear_hotkey_button(self.show_hide_hotkey_edit, "Show/Hide Window")
+        clear_next_prof_btn = self._create_clear_hotkey_button(self.next_profile_hotkey_edit, "Next Profile")
+        clear_prev_prof_btn = self._create_clear_hotkey_button(self.prev_profile_hotkey_edit, "Previous Profile")
+        clear_quick_add_btn = self._create_clear_hotkey_button(self.quick_add_rule_hotkey_edit, "Quick Add Rule")
 
-        # --- Add Action Buttons ---
-        settings_content_layout.addStretch(1) # Push buttons towards bottom
+        # Add rows to form layout
+        hotkeys_form.addRow("Toggle Engine:", self._create_hotkey_row(self.toggle_hotkey_edit, clear_toggle_btn))
+        hotkeys_form.addRow("Show/Hide Window:", self._create_hotkey_row(self.show_hide_hotkey_edit, clear_show_hide_btn))
+        hotkeys_form.addRow("Next Profile:", self._create_hotkey_row(self.next_profile_hotkey_edit, clear_next_prof_btn))
+        hotkeys_form.addRow("Previous Profile:", self._create_hotkey_row(self.prev_profile_hotkey_edit, clear_prev_prof_btn))
+        hotkeys_form.addRow("Quick Add Rule:", self._create_hotkey_row(self.quick_add_rule_hotkey_edit, clear_quick_add_btn))
+        settings_form_layout.addLayout(hotkeys_form)
 
-        # Reset Settings Button
+        settings_form_layout.addWidget(self._create_separator())
+
+        # --- Advanced Settings ---
+        advanced_group_label = QLabel("<b>Advanced</b>")
+        settings_form_layout.addWidget(advanced_group_label)
+
+        # Listening Port
+        # ... (port setting - if needed) ...
+
+        # Settings Folder/Reset
+        folder_reset_layout = QHBoxLayout()
+        self.open_settings_folder_button = QPushButton("Open Config Folder")
+        if os.path.exists(FOLDER_ICON_PATH): self.open_settings_folder_button.setIcon(QIcon(FOLDER_ICON_PATH))
+        folder_reset_layout.addWidget(self.open_settings_folder_button)
+        folder_reset_layout.addStretch()
         self.reset_settings_button = QPushButton("Reset All Settings")
-        self.reset_settings_button.setObjectName("ResetSettingsButton") # For specific styling (e.g., danger color)
-        self.reset_settings_button.setToolTip("Resets all proxies, rules, profiles, and settings to default.")
-        settings_content_layout.addWidget(self.reset_settings_button)
+        if os.path.exists(RESET_ICON_PATH): self.reset_settings_button.setIcon(QIcon(RESET_ICON_PATH))
+        self.reset_settings_button.setObjectName("DangerButton") # For danger styling
+        folder_reset_layout.addWidget(self.reset_settings_button)
+        settings_form_layout.addLayout(folder_reset_layout)
 
-        settings_content_layout.addSpacing(15) # Space below buttons
 
-        # Version Info
-        app_version = QApplication.applicationVersion()
-        developer_name = QApplication.organizationName()
-        version_label = QLabel(f"Version: {app_version}\nDeveloper: {developer_name}")
-        version_label.setObjectName("VersionLabel")
-        version_label.setAlignment(Qt.AlignmentFlag.AlignLeft) # Align left
-        version_label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
-        settings_content_layout.addWidget(version_label) # Add version info
+        settings_form_layout.addStretch() # Push content up
 
-        # Add the content widget to the main settings page layout
-        settings_layout.addWidget(settings_content_widget)
+        settings_scroll.setWidget(settings_content_widget)
+        settings_page_layout.addWidget(settings_scroll)
+        # --- End Settings Page ---
+
 
         # --- Add Pages to Stack ---
         self.main_content_area.addWidget(self.rules_page)
@@ -603,37 +570,67 @@ class MainWindow(QMainWindow):
         self.main_content_area.addWidget(self.settings_page)
 
         # --- Status Bar ---
-        # Use QMainWindow's built-in status bar
-        self.status_bar_label = QLabel("Ready") # Use a label for more flexibility
-        self.statusBar().addWidget(self.status_bar_label, stretch=1)
-        self.statusBar().setObjectName("StatusBar")
+        self.status_bar_widget = QWidget()
+        self.status_bar_widget.setObjectName("StatusBar")
+        status_bar_layout = QHBoxLayout(self.status_bar_widget)
+        status_bar_layout.setContentsMargins(15, 5, 15, 5) # Padding
 
-        # --- Settings Page Widgets ---
-        self.settings_page = QWidget()
-        self.settings_page.setObjectName("SettingsPage")
-        settings_layout = QVBoxLayout(self.settings_page)
-        settings_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        # Engine status label
+        self.status_bar_label = QLabel("Proxy Engine: Inactive")
+        self.status_bar_label.setObjectName("StatusLabel")
+        status_bar_layout.addWidget(self.status_bar_label)
+        status_bar_layout.addStretch(1) # Add stretch BEFORE profile selector
 
-        # ... existing Theme, Close Behavior, Startup checkboxes ...
+        # First separator
+        first_separator = self._create_vertical_separator()
+        status_bar_layout.addWidget(first_separator)
 
-        # ... existing Hotkey Settings, Profile Management, Version Info ...
+        # Active Profile section
+        active_profile_label = QLabel("Active Profile:  ")
+        active_profile_label.setObjectName("StatusBarLabel") # Style for status bar
+        self.active_profile_combo = QComboBox()
+        self.active_profile_combo.setMinimumWidth(150) # Adjust width as needed
+        self.active_profile_combo.setToolTip("Select the currently active profile for the proxy engine")
+        self.active_profile_combo.setObjectName("StatusBarComboBox") # Style for status bar
+        status_bar_layout.addWidget(active_profile_label)
+        status_bar_layout.addWidget(self.active_profile_combo)
+
+        # Second separator
+        second_separator = self._create_vertical_separator()
+        status_bar_layout.addWidget(second_separator)
+
+        # Version label in a container to center it
+        version_container = QWidget()
+        version_layout = QHBoxLayout(version_container)
+        version_layout.setContentsMargins(10, 0, 10, 0)
+        version_label = QLabel(f"v{QApplication.applicationVersion()}")
+        version_label.setObjectName("VersionLabel")
+        version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        version_layout.addWidget(version_label, alignment=Qt.AlignmentFlag.AlignCenter)
+        status_bar_layout.addWidget(version_container)
 
     def _create_layouts(self):
         """Create and arrange layouts."""
         # --- Central Widget & Main Layout ---
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
-        main_layout = QHBoxLayout(central_widget)
-        main_layout.setContentsMargins(0, 0, 0, 0) # No margins for the main layout
-        main_layout.setSpacing(0) # No spacing between sidebar and content
+        # Main layout is now just the content layout + status bar
+        main_layout = QVBoxLayout(central_widget)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+
+        # --- Content Layout (Sidebar + StackedWidget) ---
+        content_layout = QHBoxLayout()
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
 
         # --- Sidebar Layout ---
         sidebar_layout = QVBoxLayout(self.sidebar_frame)
         sidebar_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        sidebar_layout.setContentsMargins(5, 15, 5, 10) # Adjusted margins for toggle
+        sidebar_layout.setContentsMargins(5, 15, 5, 10)
         sidebar_layout.setSpacing(10)
 
-        # Add Toggle Button at the top
+        # ---> Add the toggle button (it now exists) <---
         sidebar_layout.addWidget(self.toggle_proxy_button, alignment=Qt.AlignmentFlag.AlignCenter)
         sidebar_layout.addSpacing(20) # Space below toggle
 
@@ -643,52 +640,94 @@ class MainWindow(QMainWindow):
         sidebar_layout.addStretch() # Push settings to bottom
         sidebar_layout.addWidget(self.nav_button_settings, alignment=Qt.AlignmentFlag.AlignCenter)
 
-        # --- Add Sidebar and Content Area to Main Layout ---
-        main_layout.addWidget(self.sidebar_frame)
-        main_layout.addWidget(self.main_content_area, stretch=1) # Content area takes remaining space
+        # --- Add Sidebar and Content Area to Content Layout ---
+        content_layout.addWidget(self.sidebar_frame)
+        content_layout.addWidget(self.main_content_area, stretch=1)
 
-        # No need for placeholder layout setup here anymore, stack handles it
+        # --- Assemble Main Layout ---
+        # ---> REMOVE Header <---
+        # main_layout.addWidget(self.header_widget)
+        main_layout.addLayout(content_layout, stretch=1) # Content takes most space
+        main_layout.addWidget(self.status_bar_widget) # Add status bar
 
     def _create_connections(self):
         """Connect signals and slots."""
+        # Navigation Buttons
         self.nav_button_rules.clicked.connect(lambda: self._handle_nav_click(0, self.nav_button_rules))
         self.nav_button_proxies.clicked.connect(lambda: self._handle_nav_click(1, self.nav_button_proxies))
         self.nav_button_settings.clicked.connect(lambda: self._handle_nav_click(2, self.nav_button_settings))
 
-        # Connect theme switcher
-        self.theme_combo.currentIndexChanged.connect(self._handle_theme_change)
+        # Main Toggle Button
+        self.toggle_proxy_button.clicked.connect(self._handle_toggle_proxy)
 
-        # Proxy Engine Toggle Button directly triggers the handler
-        self.toggle_proxy_button.toggled.connect(self._handle_toggle_proxy)
-
-        # Engine signals update UI status *only*
-        self.proxy_engine.status_changed.connect(self._handle_engine_status_update_ui) # Renamed target slot
+        # Proxy Engine Signals
+        self.proxy_engine.status_changed.connect(self._handle_engine_status_update_ui)
         self.proxy_engine.error_occurred.connect(self._handle_engine_error)
         self.proxy_engine.proxy_test_result.connect(self._handle_proxy_test_result)
 
-        # Settings checkboxes save on change
-        self.close_to_tray_checkbox.stateChanged.connect(self.save_settings)
-        self.start_engine_checkbox.stateChanged.connect(self.save_settings)
+        # Tray Icon Actions
+        if self.tray_icon: # Check if tray icon was successfully created
+            self.tray_icon.activated.connect(self.on_tray_icon_activated)
+            self.show_action.triggered.connect(self.toggle_visibility) # Connect show action
+            self.quit_action.triggered.connect(self.quit_application) # Connect quit action
+            # Connect toggle action from tray menu
+            if hasattr(self, 'toggle_engine_tray_action'):
+                # Use lambda to pass checked state to handler if needed, or just call toggle proxy
+                self.toggle_engine_tray_action.triggered.connect(lambda checked=self.toggle_engine_tray_action.isChecked(): self._handle_toggle_proxy(checked))
+                # self.toggle_engine_tray_action.triggered.connect(self._handle_toggle_proxy) # Simpler if handler checks state
+        else:
+            print("[Connect] Tray icon not available, skipping tray connections.")
 
-        # Hotkey edits save on finish
-        # ... (hotkey connections) ...
+        # Settings Page connections
+        self.theme_combo.currentIndexChanged.connect(self._handle_theme_change)
+        self.close_to_tray_checkbox.stateChanged.connect(self._handle_close_setting_change)
+        self.start_engine_checkbox.stateChanged.connect(self.save_settings) # Save immediately on change
+        # Hotkey Edits (Connect saving to editingFinished or textChanged?)
+        # Using editingFinished is better to avoid saving on every keystroke
+        self.toggle_hotkey_edit.editingFinished.connect(self._save_hotkey_setting)
+        self.show_hide_hotkey_edit.editingFinished.connect(self._save_hotkey_setting)
+        self.next_profile_hotkey_edit.editingFinished.connect(self._save_hotkey_setting)
+        self.prev_profile_hotkey_edit.editingFinished.connect(self._save_hotkey_setting)
+        self.quick_add_rule_hotkey_edit.editingFinished.connect(self._save_hotkey_setting)
 
-        # Profiles
-        # ... (profile connections) ...
+        # Profile Management buttons
+        # print(f"DEBUG: Type of self.profile_list_widget before connection: {type(self.profile_list_widget)}") # Keep debug line
+        # Connect based on the error message, assuming it's currently seen as QComboBox
+        # ---> Revert connection to use QListWidget signal <---
+        # try:
+        #     # Use currentIndexChanged as the error suggests for now
+        #     # self.profile_list_widget.currentIndexChanged.connect(self._update_profile_button_states)
+        #     # print("INFO: Connected profile_list_widget using currentIndexChanged.")
+        # except AttributeError:
+        #      # Fallback if it *is* correctly identified as QListWidget later
+        #      print("WARNING: Connecting profile_list_widget using currentItemChanged as fallback.")
+        # ---> Correct connection for QListWidget <---
+        self.profile_list_widget.currentItemChanged.connect(self._update_profile_button_states)
+        print("INFO: Connected profile_list_widget using currentItemChanged.")
 
-        # Connect Rule Profile Selector (View Selector)
-        self.rule_profile_selector.currentIndexChanged.connect(self._handle_active_profile_change)
 
-        # Connect Profile Management Buttons (Settings Page)
         self.add_profile_button.clicked.connect(self._add_profile)
         self.rename_profile_button.clicked.connect(self._rename_profile)
         self.delete_profile_button.clicked.connect(self._delete_profile)
-        # Connect selection changes in the settings profile list to update button states
-        self.profile_list_widget.currentIndexChanged.connect(self._update_profile_button_states)
 
-        # --- Connect New Settings Buttons ---
+        # Active Profile Selector (Main Header)
+        self.active_profile_combo.currentIndexChanged.connect(self._handle_active_profile_change)
+
+        # System Proxy Checkbox (Windows only)
+        if IS_WINDOWS:
+            self.enable_system_proxy_checkbox.stateChanged.connect(self._handle_system_proxy_toggle)
+
+        # Settings Folder/Reset Buttons
+        self.open_settings_folder_button.clicked.connect(self._open_settings_folder)
         self.reset_settings_button.clicked.connect(self._reset_all_settings)
-        # --- End Connect Buttons ---
+
+        # Connect Hotkey Manager signals
+        self.hotkey_manager.toggle_engine_triggered.connect(self._handle_toggle_hotkey_action)
+        self.hotkey_manager.show_hide_triggered.connect(self.toggle_visibility)
+        self.hotkey_manager.next_profile_triggered.connect(self._switch_to_next_profile) # Connect profile switching
+        self.hotkey_manager.prev_profile_triggered.connect(self._switch_to_prev_profile) # Connect profile switching
+        self.hotkey_manager.quick_add_rule_triggered.connect(self._trigger_quick_add_rule) # Connect quick add
+        self.hotkey_manager.error_occurred.connect(self._handle_hotkey_error)
 
     def _handle_nav_click(self, index: int, clicked_button: QPushButton):
         """Handles clicks on navigation buttons."""
@@ -806,75 +845,130 @@ class MainWindow(QMainWindow):
 
     def _update_toggle_button_state(self, status: str):
         """Updates the visual state AND ICON of the main toggle button."""
-        is_active = (status == 'active')
+        is_active = (status == 'active' or status == 'starting' or status == 'switching')
+        is_error = (status == 'error')
+        is_starting = (status == 'starting')
+        is_stopping = (status == 'stopping')
+        is_switching = (status == 'switching')
+        
         self.toggle_proxy_button.setChecked(is_active) # Set checked state first
 
         # Determine color and icon path based on NEW state
-        toggle_state = "checked" if is_active else "default"
+        toggle_state = "checked" if is_active else ("error" if is_error else "default")
         toggle_icon_color = self._get_main_icon_color("toggle", state=toggle_state)
-        toggle_icon_path = TOGGLE_ON_ICON_PATH if is_active else TOGGLE_OFF_ICON_PATH
 
-        # Load and set the correctly colored icon
-        toggle_svg = load_and_colorize_svg_content(toggle_icon_path, toggle_icon_color)
-        self.toggle_proxy_button.setIcon(create_icon_from_svg_data(toggle_svg))
+        # Choose the correct icon path based on status
+        toggle_icon_path = None  # For toggle itself
+        if is_error:
+            toggle_icon_path = TOGGLE_ERROR_ICON_PATH # Will now point to toggle-error.svg
+        elif is_active or is_starting or is_switching:
+            toggle_icon_path = TOGGLE_ON_ICON_PATH  # Will now point to toggle-right.svg
+        else: # inactive or stopping
+            toggle_icon_path = TOGGLE_OFF_ICON_PATH # Will now point to toggle-left.svg
 
-        tooltip = "Proxy Engine is ON" if is_active else "Proxy Engine is OFF"
+        # ---> Check if icon file exists before loading <---
+        if os.path.exists(toggle_icon_path):
+            toggle_svg = load_and_colorize_svg_content(toggle_icon_path, toggle_icon_color)
+            if toggle_svg:
+                self.toggle_proxy_button.setIcon(create_icon_from_svg_data(toggle_svg))
+            else:
+                print(f"Warning: Failed to load/colorize toggle icon: {toggle_icon_path}")
+                self.toggle_proxy_button.setIcon(QIcon()) # Clear icon
+                self.toggle_proxy_button.setText("?") # Fallback text
+        else:
+            print(f"Error: Icon file not found at {toggle_icon_path}")
+            self.toggle_proxy_button.setIcon(QIcon()) # Clear icon
+            # Set fallback text based on state
+            fallback_text = "ON" if is_active else ("ERR" if is_error else "OFF")
+            self.toggle_proxy_button.setText(fallback_text)
+        # ---> End check <---
+
+        # Update tooltip
+        if is_error:
+            tooltip = "Proxy Engine ERROR"
+        elif is_switching:
+            tooltip = "Switching Active Profile..."
+        elif is_active:
+            tooltip = "Proxy Engine is ON"
+        elif is_starting:
+            tooltip = "Proxy Engine is Starting..."
+        elif is_stopping:
+            tooltip = "Proxy Engine is Stopping..."
+        else:
+            tooltip = "Proxy Engine is OFF"
+        
         self.toggle_proxy_button.setToolTip(tooltip)
 
     def _create_tray_icon(self):
-        """Create the system tray icon and its context menu."""
-        # Check if required icons exist
-        if not all(os.path.exists(p) for p in [TRAY_ICON_INACTIVE_PATH, TRAY_ICON_ACTIVE_PATH, TRAY_ICON_ERROR_PATH]):
-             print(f"Warning: One or more tray icons not found in {IMAGES_DIR}. Tray functionality may be limited.")
-             # Fallback: Use main icon if specific ones are missing
-             self.icon_inactive = QIcon(MAIN_ICON_PATH)
-             self.icon_active = QIcon(MAIN_ICON_PATH)
-             self.icon_error = QIcon(MAIN_ICON_PATH)
+        """Creates the system tray icon and menu."""
+        # Check if tray icon is already created
+        if hasattr(self, 'tray_icon') and self.tray_icon:
+             print("[Tray] Tray icon already exists.")
+             return
+
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            print("[Tray] System tray not available on this system.")
+            self.tray_icon = None
+            return
+
+        self.tray_icon = QSystemTrayIcon(self)
+        self.tray_icon.setToolTip(f"{QApplication.applicationName()} - Inactive")
+
+        # Set initial icon (inactive)
+        inactive_icon_path = TRAY_ICON_INACTIVE_PATH # Use constant
+        if os.path.exists(inactive_icon_path):
+             self.tray_icon.setIcon(QIcon(inactive_icon_path))
         else:
-            self.icon_inactive = QIcon(TRAY_ICON_INACTIVE_PATH)
-            self.icon_active = QIcon(TRAY_ICON_ACTIVE_PATH)
-            self.icon_error = QIcon(TRAY_ICON_ERROR_PATH)
+             print(f"[Tray] Warning: Inactive tray icon not found at {inactive_icon_path}")
+             # Fallback: use main icon if available
+             if os.path.exists(MAIN_ICON_PATH):
+                  self.tray_icon.setIcon(QIcon(MAIN_ICON_PATH))
 
-        # Create Tray Icon Menu
+        # --- Create Tray Menu ---
         self.tray_menu = QMenu(self)
-        show_action = QAction("Show Window", self)
 
-        # --- Add Toggle Action ---
+        # Show/Hide Action
+        self.show_action = QAction("Show Window", self)
+        # Connection moved to _create_connections
+
+        # Toggle Engine Action
         self.toggle_engine_tray_action = QAction("Enable Engine", self)
         self.toggle_engine_tray_action.setCheckable(True)
-        self.toggle_engine_tray_action.triggered.connect(self._handle_toggle_proxy) # Reuse existing handler
-        # --- End Add Toggle Action ---
+        # Connection moved to _create_connections
+        
+        # Profiles Submenu
+        self.profiles_menu = QMenu("Active Profile", self)
+        self.profile_action_group = QActionGroup(self)
+        self.profile_action_group.setExclusive(True)
+        # Will be populated in _update_profile_selectors
+        
+        # Quit Action
+        self.quit_action = QAction("Quit", self)
+        # Connection moved to _create_connections
 
-        quit_action = QAction("Exit", self)
-
-        show_action.triggered.connect(self.toggle_visibility)
-        quit_action.triggered.connect(self.quit_application)
-
-        self.tray_menu.addAction(show_action)
+        # Add actions to menu
+        self.tray_menu.addAction(self.show_action)
         self.tray_menu.addSeparator()
-        # --- Add Action to Menu ---
         self.tray_menu.addAction(self.toggle_engine_tray_action)
         self.tray_menu.addSeparator()
-        # --- End Add Action to Menu ---
-        self.tray_menu.addAction(quit_action)
+        self.tray_menu.addMenu(self.profiles_menu) # Add profiles submenu
+        self.tray_menu.addSeparator()
+        self.tray_menu.addAction(self.quit_action)
 
-        # Create Tray Icon
-        self.tray_icon = QSystemTrayIcon(self.icon_inactive, self) # Start inactive
         self.tray_icon.setContextMenu(self.tray_menu)
-        self.tray_icon.setToolTip("ProxieWy (Inactive)")
-
-        # Connect activation signal (e.g., left-click)
-        self.tray_icon.activated.connect(self.on_tray_icon_activated)
-
         self.tray_icon.show()
-        self.update_tray_status('inactive') # Set initial state
+
+        # Connection (activated signal) moved to _create_connections
+        print("[Tray] System tray icon created.")
 
     def on_tray_icon_activated(self, reason):
-        """Handle tray icon activation."""
-        # Show/Hide on left-click (Trigger)
-        if reason == QSystemTrayIcon.ActivationReason.Trigger:
-            self.toggle_visibility()
-        # Context menu is handled automatically by setContextMenu
+         """Handles activation of the tray icon."""
+         # Show window on left click, show menu on right click/context
+         if reason == QSystemTrayIcon.ActivationReason.Trigger: # Left click
+              self.toggle_visibility()
+         elif reason == QSystemTrayIcon.ActivationReason.Context: # Right click
+              # Menu is handled by setContextMenu, but you could add logic here
+              pass
 
     def toggle_visibility(self):
         """Toggle the main window's visibility."""
@@ -897,25 +991,28 @@ class MainWindow(QMainWindow):
 
     def update_tray_status(self, status: str):
         """Updates the tray icon and tooltip based on status."""
-        tooltip_base = "ProxieWy"
-        icon = self.icon_inactive # Default
-        state_text = "Inactive"
+        if not self.tray_icon: return # Don't do anything if tray isn't available
+
+        tooltip_base = QApplication.applicationName() # Use dynamic app name
+        icon = self.icon_inactive # Default to loaded inactive icon
 
         if status == 'active':
             icon = self.icon_active; state_text = "Active"
         elif status == 'error':
             icon = self.icon_error; state_text = "Error"
         elif status == 'starting':
-            # Maybe use active icon while starting? Or a specific one?
-            icon = self.icon_active; state_text = "Starting..."
+            icon = self.icon_active; state_text = "Starting..." # Use active icon
         elif status == 'stopping':
-            # Maybe use inactive icon while stopping?
-            icon = self.icon_inactive; state_text = "Stopping..."
-        # else: # inactive state uses defaults
+            icon = self.icon_inactive; state_text = "Stopping..." # Use inactive icon
+        elif status == 'switching':
+            icon = self.icon_active; state_text = "Switching Profile..." # Use active icon during profile switch
+        else: # inactive
+             state_text = "Inactive"
+             # icon = self.icon_inactive (already default)
 
-        self.tray_icon.setIcon(icon)
+        self.tray_icon.setIcon(icon) # Use the loaded QIcon object
         self.tray_icon.setToolTip(f"{tooltip_base} ({state_text})")
-        # Status bar text handled separately
+        # Status bar text handled separately in _handle_engine_status_update_ui
 
     def _center_window(self):
         """Center the window on the screen. (Use only if no geometry saved)."""
@@ -953,70 +1050,96 @@ class MainWindow(QMainWindow):
         last_index = settings.value("ui/last_view_index", defaultValue=0, type=int)
         # We'll apply this in _set_initial_active_view after widgets are ready
 
-        # Load Profiles
-        profiles_json = settings.value("profiles/list", defaultValue="{}", type=str)
+        # --- Load Profiles ---
+        settings.beginGroup("profiles")
+        profiles_json = settings.value("data_json", defaultValue="{}", type=str) # Load as JSON string
         try:
-            loaded_profiles = json.loads(profiles_json)
-            if isinstance(loaded_profiles, dict):
-                 self.profiles = loaded_profiles
-                 print(f"[Settings] Loaded {len(self.profiles)} profiles.")
-            else:
-                 print("[Settings] Warning: Invalid format for profiles in settings, resetting.")
-                 self.profiles = {"__default__": {"name": "Default"}}
+            self.profiles = json.loads(profiles_json)
+            if not isinstance(self.profiles, dict): # Basic type check after loading
+                print("[Settings] Warning: Loaded profiles data is not a dictionary. Resetting.")
+                self.profiles = {}
         except json.JSONDecodeError:
-            print("[Settings] Warning: Failed to decode profiles JSON, resetting.")
-            self.profiles = {"__default__": {"name": "Default"}}
-        if "__default__" not in self.profiles:
-             self.profiles["__default__"] = {"name": "Default"}
+            print("[Settings] Warning: Failed to decode profiles JSON. Resetting profiles.")
+            self.profiles = {} # Reset if JSON is invalid
+        settings.endGroup()
 
+        # ---> Ensure at least one profile exists <---
+        if not self.profiles:
+             default_profile_id = str(uuid.uuid4())
+             self.profiles = {
+                 default_profile_id: {"id": default_profile_id, "name": "Default Profile"}
+             }
+             print("[Settings] No profiles found or loaded correctly, created 'Default Profile'.")
 
         # Load Active Profile ID
-        self.active_profile_id = settings.value("profiles/active_id", defaultValue="__default__", type=str)
-        if self.active_profile_id not in self.profiles:
-             print(f"[Settings] Warning: Active profile ID '{self.active_profile_id}' not found, reverting to default.")
-             self.active_profile_id = "__default__"
-        print(f"[Settings] Loaded active profile ID: {self.active_profile_id}")
+        loaded_active_id = settings.value("ui/active_profile_id", defaultValue=None, type=str)
+        # ---> Validate Active Profile ID <---
+        if loaded_active_id and loaded_active_id in self.profiles:
+             self._current_active_profile_id = loaded_active_id
+        else:
+             # If saved ID is invalid or missing, fall back to the first available profile ID
+             self._current_active_profile_id = next(iter(self.profiles.keys()), None)
+             print(f"[Settings] Invalid/missing active profile ID, defaulting to: {self._current_active_profile_id}")
 
-
-        # Load Proxies
-        proxies_json = settings.value("proxies/list", defaultValue="{}", type=str)
+        # --- Load Proxies ---
+        settings.beginGroup("proxies")
+        proxies_json = settings.value("data_json", defaultValue="{}", type=str) # Load as JSON string
         try:
-             loaded_proxies = json.loads(proxies_json)
-             if isinstance(loaded_proxies, dict):
-                  self.proxies = loaded_proxies
-                  print(f"[Settings] Loaded {len(self.proxies)} proxies.")
-             else:
-                  print("[Settings] Warning: Invalid format for proxies in settings, resetting.")
-                  self.proxies = {}
+            self.proxies = json.loads(proxies_json)
+            if not isinstance(self.proxies, dict):
+                print("[Settings] Warning: Loaded proxies data is not a dictionary. Resetting.")
+                self.proxies = {}
+            # Add status field if missing from old saves
+            for proxy_id, proxy_data in self.proxies.items():
+                if isinstance(proxy_data, dict) and 'status' not in proxy_data:
+                     proxy_data['status'] = 'unknown' # Add default status
         except json.JSONDecodeError:
-             print("[Settings] Warning: Failed to decode proxies JSON, resetting.")
-             self.proxies = {}
+            print("[Settings] Warning: Failed to decode proxies JSON. Resetting proxies.")
+            self.proxies = {}
+        settings.endGroup()
 
-
-        # Load Rules
-        rules_json = settings.value("rules/list", defaultValue="{}", type=str)
+        # --- Load Rules ---
+        settings.beginGroup("rules")
+        rules_json = settings.value("data_json", defaultValue="{}", type=str) # Load as JSON string
         try:
             loaded_rules = json.loads(rules_json)
-            if isinstance(loaded_rules, dict):
-                 self.rules = loaded_rules
-                 print(f"[Settings] Loaded {len(self.rules)} rules.")
-            else:
-                 print("[Settings] Warning: Invalid format for rules in settings, resetting.")
-                 self.rules = {}
+            if not isinstance(loaded_rules, dict):
+                print("[Settings] Warning: Loaded rules data is not a dictionary. Resetting.")
+                loaded_rules = {}
         except json.JSONDecodeError:
-            print("[Settings] Warning: Failed to decode rules JSON, resetting.")
-            self.rules = {}
+            print("[Settings] Warning: Failed to decode rules JSON. Resetting rules.")
+            loaded_rules = {}
+        settings.endGroup()
 
-        # Load Hotkey Settings Preferences
+        # --- > Process and Validate Rules < ---
+        self.rules = {}
+        if self._current_active_profile_id: # Only process rules if a profile exists
+             for rule_id, rule_data in loaded_rules.items():
+                  rule_profile_id = rule_data.get("profile_id")
+                  # Assign rules with missing/invalid profile ID to the current active profile
+                  if rule_profile_id is None or rule_profile_id not in self.profiles:
+                       print(f"[Settings] Rule '{rule_id}' ({rule_data.get('domain')}) has invalid/missing profile ID '{rule_profile_id}'. Assigning to active profile '{self._current_active_profile_id}'.")
+                       rule_data["profile_id"] = self._current_active_profile_id
+                  # Ensure 'enabled' field exists
+                  if "enabled" not in rule_data:
+                       rule_data["enabled"] = True # Default to enabled
+                  self.rules[rule_id] = rule_data
+        else:
+            print("[Settings] Warning: No active profile ID available, cannot load/assign rules.")
+
+
+        # Load Hotkeys
         toggle_seq_str = settings.value("hotkeys/toggle_proxy", defaultValue="", type=str)
         show_hide_seq_str = settings.value("hotkeys/show_hide_window", defaultValue="", type=str)
-        next_prof_seq_str = settings.value("hotkeys/next_profile", defaultValue="", type=str) # Load new hotkey
-        prev_prof_seq_str = settings.value("hotkeys/prev_profile", defaultValue="", type=str) # Load new hotkey
+        next_prof_seq_str = settings.value("hotkeys/next_profile", defaultValue="", type=str)
+        prev_prof_seq_str = settings.value("hotkeys/prev_profile", defaultValue="", type=str)
+        quick_add_seq_str = settings.value("hotkeys/quick_add_rule", defaultValue="", type=str)
 
         self.toggle_hotkey_edit.setKeySequence(QKeySequence.fromString(toggle_seq_str))
         self.show_hide_hotkey_edit.setKeySequence(QKeySequence.fromString(show_hide_seq_str))
-        self.next_profile_hotkey_edit.setKeySequence(QKeySequence.fromString(next_prof_seq_str)) # Set sequence
-        self.prev_profile_hotkey_edit.setKeySequence(QKeySequence.fromString(prev_prof_seq_str)) # Set sequence
+        self.next_profile_hotkey_edit.setKeySequence(QKeySequence.fromString(next_prof_seq_str))
+        self.prev_profile_hotkey_edit.setKeySequence(QKeySequence.fromString(prev_prof_seq_str))
+        self.quick_add_rule_hotkey_edit.setKeySequence(QKeySequence.fromString(quick_add_seq_str))
 
         # Load Startup Setting
         start_on_startup = settings.value("app/start_engine_on_startup", defaultValue=False, type=bool)
@@ -1024,7 +1147,14 @@ class MainWindow(QMainWindow):
         self.start_engine_checkbox.setChecked(start_on_startup)
         self.start_engine_checkbox.blockSignals(False) # <<< Unblock signals
 
-        settings.endGroup()
+        # Load System Proxy Setting (Windows only)
+        if hasattr(self, 'enable_system_proxy_checkbox'):
+            use_system_proxy = settings.value("app/set_system_proxy", defaultValue=False, type=bool)
+            self.enable_system_proxy_checkbox.blockSignals(True)
+            self.enable_system_proxy_checkbox.setChecked(use_system_proxy)
+            self.enable_system_proxy_checkbox.blockSignals(False)
+
+        # --- Note: Don't need settings.endGroup() for QSettings ---
 
         # --- Apply Theme AFTER loading other data ---
         self.apply_theme(loaded_theme_name)
@@ -1033,6 +1163,15 @@ class MainWindow(QMainWindow):
         self.theme_combo.setCurrentIndex(theme_index)
         self.theme_combo.blockSignals(False)
         # ---
+
+        print(f"[Settings] Loaded {len(self.profiles)} profiles, {len(self.proxies)} proxies, {len(self.rules)} rules.")
+        print(f"[Settings] Active profile set to: {self._current_active_profile_id} ({self.profiles.get(self._current_active_profile_id, {}).get('name', 'N/A')})")
+
+        # Final updates after loading all settings
+        self._update_profile_selectors() # Refresh profile UI elements
+        self._update_rules_title_label() # Update rules title with active profile
+
+        return True
 
     def save_settings(self):
         # Use the defined settings_file path
@@ -1052,46 +1191,72 @@ class MainWindow(QMainWindow):
         # Save Last View
         settings.setValue("ui/last_view_index", self.main_content_area.currentIndex())
 
-        # Save Profiles
-        profiles_json = json.dumps(self.profiles, indent=4)
-        settings.setValue("profiles/list", profiles_json)
-        print(f"[Settings] Saved {len(self.profiles)} profiles.")
+        # --- Save Profiles ---
+        settings.beginGroup("profiles")
+        profiles_json = json.dumps(self.profiles, indent=4) # Serialize to JSON string
+        settings.setValue("data_json", profiles_json)       # Save the JSON string
+        settings.endGroup()
 
-        # Save Active Profile ID (make sure it's valid before saving)
-        if self.active_profile_id in self.profiles:
-            settings.setValue("profiles/active_id", self.active_profile_id)
-            print(f"[Settings] Saved active profile ID: {self.active_profile_id}")
+        # Save Active Profile ID
+        # Ensure we save a valid ID
+        if self._current_active_profile_id and self._current_active_profile_id in self.profiles:
+             settings.setValue("ui/active_profile_id", self._current_active_profile_id)
+        elif self.profiles:
+             # If current ID became invalid somehow, save the first available one
+             first_profile_id = next(iter(self.profiles.keys()), None)
+             settings.setValue("ui/active_profile_id", first_profile_id)
+             print(f"[Settings] Warning: Saving fallback active profile ID: {first_profile_id}")
         else:
-            settings.setValue("profiles/active_id", "__default__") # Fallback save
-            print(f"[Settings] Warning: Active profile ID '{self.active_profile_id}' invalid, saving default.")
+             settings.remove("ui/active_profile_id") # Remove if no profiles exist
+             print("[Settings] Warning: No profiles exist, clearing active profile ID.")
 
 
-        # Save Proxies
-        proxies_json = json.dumps(self.proxies, indent=4)
-        settings.setValue("proxies/list", proxies_json)
-        print(f"[Settings] Saved {len(self.proxies)} proxies.")
+        # --- Save Proxies ---
+        settings.beginGroup("proxies")
+        proxies_json = json.dumps(self.proxies, indent=4) # Serialize to JSON string
+        settings.setValue("data_json", proxies_json)        # Save the JSON string
+        settings.endGroup()
 
-        # Save Rules
-        rules_json = json.dumps(self.rules, indent=4)
-        settings.setValue("rules/list", rules_json)
-        print(f"[Settings] Saved {len(self.rules)} rules.")
+        # --- Save Rules ---
+        settings.beginGroup("rules")
+        # Ensure all saved rules have a valid profile_id (should be handled on load/save)
+        valid_rules_to_save = {
+             rule_id: rule_data for rule_id, rule_data in self.rules.items()
+             if rule_data.get("profile_id") in self.profiles
+        }
+        rules_json = json.dumps(valid_rules_to_save, indent=4) # Serialize to JSON string
+        settings.setValue("data_json", rules_json)            # Save the JSON string
+        settings.endGroup()
 
-        # Save Hotkeys
-        settings.setValue("hotkeys/toggle_proxy", self.toggle_hotkey_edit.keySequence().toString())
-        settings.setValue("hotkeys/show_hide_window", self.show_hide_hotkey_edit.keySequence().toString())
-        settings.setValue("hotkeys/next_profile", self.next_profile_hotkey_edit.keySequence().toString()) # Save new hotkey
-        settings.setValue("hotkeys/prev_profile", self.prev_profile_hotkey_edit.keySequence().toString()) # Save new hotkey
+        # --- Save Hotkeys Preferences ---
+        # We save the QKeySequence string as before for persistence
+        settings.setValue("hotkeys/toggle_proxy", self.toggle_hotkey_edit.keySequence().toString(QKeySequence.SequenceFormat.NativeText))
+        settings.setValue("hotkeys/show_hide_window", self.show_hide_hotkey_edit.keySequence().toString(QKeySequence.SequenceFormat.NativeText))
+        settings.setValue("hotkeys/next_profile", self.next_profile_hotkey_edit.keySequence().toString(QKeySequence.SequenceFormat.NativeText))
+        settings.setValue("hotkeys/prev_profile", self.prev_profile_hotkey_edit.keySequence().toString(QKeySequence.SequenceFormat.NativeText))
+        settings.setValue("hotkeys/quick_add_rule", self.quick_add_rule_hotkey_edit.keySequence().toString(QKeySequence.SequenceFormat.NativeText))
+        # --- The actual registration happens via _load_and_register_hotkeys ---
 
         # Save Startup Setting
         settings.setValue("app/start_engine_on_startup", self.start_engine_checkbox.isChecked())
 
+        # Save System Proxy Setting (Windows only)
+        if hasattr(self, 'enable_system_proxy_checkbox'):
+            settings.setValue("app/set_system_proxy", self.enable_system_proxy_checkbox.isChecked())
+
         settings.sync() # Force writing to file
+        print(f"[Settings] Saved {len(self.profiles)} profiles, {len(self.proxies)} proxies, {len(valid_rules_to_save)} rules.")
         print("[Settings] Sync complete.")
 
     def quit_application(self):
-        """Save settings and quit the application."""
+        """Save settings, stop listener, and quit the application."""
+        print("Quit requested.")
+        # --- Stop Hotkey Listener ---
+        print("Stopping hotkey listener...")
+        self.hotkey_manager.stop_listener()
+        # ---
         self.save_settings()
-        print("Quit requested. Stopping engine...")
+        print("Stopping engine...")
         self.proxy_engine.stop() # Ensure engine is stopped cleanly
         print("Exiting.")
         QApplication.instance().quit()
@@ -1118,487 +1283,798 @@ class MainWindow(QMainWindow):
         return {pid: pdata.get('name', 'Unnamed') for pid, pdata in self.proxies.items()}
 
     def _get_profile_name_map(self) -> dict:
-        """Helper to get {profile_id: profile_name} including the conceptual 'All'."""
+        """Helper to get {profile_id: profile_name} for existing profiles."""
         # Start with existing profiles
         names = {pid: pdata.get('name', 'Unnamed') for pid, pdata in self.profiles.items()}
-        # Add the conceptual "All" profile name mapping (using None as key internally)
-        names[None] = self.ALL_RULES_PROFILE_NAME # Map None ID to the display name
+        # ---> Remove the line adding the non-existent constant <---
+        # names[None] = self.ALL_RULES_PROFILE_NAME # Map None ID to the display name
         return names
 
     def _show_add_rule_editor(self):
-        if self.proxy_edit_widget.isVisible(): self._cancel_proxy_edit(animate=False)
+        """Display the rule editor for adding a new rule."""
+        # Close proxy editor if open
+        if self.proxy_edit_widget and self.proxy_edit_widget.isVisible():
+            self._cancel_proxy_edit(animate=False)
 
-        # Ensure both proxy and profile lists are up-to-date
-        print(f"[UI Add Rule] Updating rule editor. Proxies available: {len(self.proxies)}, Profiles available: {len(self.profiles)}") # Debug print
-        print(f"[UI Add Rule] Profiles data: {self.profiles}") # Debug print profiles dict
+        # Check if rule editor is already visible
+        if hasattr(self, 'rule_edit_widget') and self.rule_edit_widget and self.rule_edit_widget.isVisible():
+             print("[_show_add_rule_editor] Editor already visible.")
+             # Optionally clear fields if clicked again while open?
+             # self.rule_edit_widget.clear_fields()
+             # self.rule_edit_widget.set_focus_on_domains()
+             return
+
+        # Ensure there is an active profile
+        if not self._current_active_profile_id or self._current_active_profile_id not in self.profiles:
+             QMessageBox.warning(self, "Cannot Add Rule", "Please select or create a valid profile before adding rules.")
+             return
+             
+        # If we don't have a rule edit widget, create one
+        if not hasattr(self, 'rule_edit_widget') or self.rule_edit_widget is None:
+            print("[_show_add_rule_editor] Creating new rule editor widget...")
+            self.rule_edit_widget = RuleEditWidget(self, self.proxies, self.profiles)
+            self.rule_edit_widget.save_rules.connect(self._save_rule_entry)
+            self.rule_edit_widget.cancelled.connect(lambda: self._cancel_rule_edit(animate=True))
+            
+            # Add the new widget to the container
+            layout = self.rule_editor_container.layout()
+            if layout:
+                while layout.count():
+                    item = layout.takeAt(0)
+                    widget = item.widget()
+                    if widget:
+                        widget.deleteLater()
+                layout.addWidget(self.rule_edit_widget)
+
+        # --- Prepare the existing editor ---
+        print("[_show_add_rule_editor] Preparing rule editor...")
         self.rule_edit_widget.update_proxies(self.proxies)
-        self.rule_edit_widget.update_profiles(self.profiles) # Ensure this is called
+        self.rule_edit_widget.update_profiles(self.profiles)
+        self.rule_edit_widget.clear_fields() # Clear for adding
+        # Set the profile combo to the current active profile
+        profile_idx = self.rule_edit_widget.profile_combo.findData(self._current_active_profile_id)
+        self.rule_edit_widget.profile_combo.setCurrentIndex(max(0, profile_idx if profile_idx != -1 else 0))
+        # --- End Preparation ---
 
-        self.rule_edit_widget.clear_fields()
-        # Pre-select the profile currently viewed in the list
-        current_view_profile_id = self.rule_profile_selector.currentData()
-        target_profile_id = None if current_view_profile_id == self.ALL_RULES_PROFILE_ID else current_view_profile_id
-        profile_idx = self.rule_edit_widget.profile_combo.findData(target_profile_id)
-        self.rule_edit_widget.profile_combo.setCurrentIndex(max(0, profile_idx))
+        # --- Prepare for animation ---
+        # Make sure the container exists
+        if not hasattr(self, 'rule_editor_container') or not self.rule_editor_container:
+            print("[_show_add_rule_editor] Error: Rule editor container doesn't exist")
+            QMessageBox.critical(self, "Error", "Rule editor container missing")
+            return
+            
+        # Always create a new opacity effect to avoid using a deleted C++ object
+        print("[_show_add_rule_editor] Creating new opacity effect")
+        self.rule_edit_opacity_effect = QGraphicsOpacityEffect(self.rule_edit_widget)
+        self.rule_edit_widget.setGraphicsEffect(self.rule_edit_opacity_effect)
+            
+        # Show the widget and make it fully opaque
+        self.rule_edit_widget.setVisible(True)      # Make inner widget visible
+        self.rule_edit_opacity_effect.setOpacity(1.0) # Ensure fully opaque
+        
+        # Make sure the container is visible
+        self.rule_editor_container.setVisible(True)
+        self.rule_editor_container.setMaximumHeight(1) # Allow container expansion
+        QApplication.processEvents()
 
         target_height = self._calculate_editor_height(self.rule_edit_widget)
-        self.add_rule_button.setEnabled(False)
-        self.rule_editor_animation = self._animate_widget_height(self.rule_edit_widget, 0, target_height)
-        self.rule_editor_animation.finished.connect(self.rule_edit_widget.set_focus_on_domains)
-        self.rule_editor_animation.start()
-
-    def _show_edit_rule_editor(self, rule_id: str):
-        """Shows the editor pre-filled for editing a rule's proxy with animation."""
-        # If proxy editor is open, close it first
-        if self.proxy_edit_widget.isVisible():
-             self._cancel_proxy_edit(animate=False) # Close instantly
-
-        if rule_id in self.rules:
-             target_height = self.rule_edit_widget.sizeHint().height()
-             if target_height <= 0: target_height = 250 # Fallback height
-
-             self.rule_edit_widget.update_proxies(self.proxies)
-             edit_data = { # Prepare data for editor
-                 "ids": [rule_id],
-                 "domain": self.rules[rule_id]["domain"],
-                 "proxy_id": self.rules[rule_id]["proxy_id"]
-             }
-             self.rule_edit_widget.load_data(edit_data)
-             self.add_rule_button.setEnabled(False)
-
-             # Run animation
-             self.rule_editor_animation = self._animate_widget_height(self.rule_edit_widget, 0, target_height)
-             # Focus might not be desired when editing proxy only
-             # self.rule_editor_animation.finished.connect(self.rule_edit_widget.set_focus_on_domains)
-             self.rule_editor_animation.start() # Removed DeletionPolicy
-        else:
-            print(f"Error: Cannot edit rule with unknown ID: {rule_id}")
-
-    def _cancel_rule_edit(self, animate=True):
-        """Hides the rule editor without saving, optionally animating."""
-        if not self.rule_edit_widget.isVisible():
-            self.add_rule_button.setEnabled(True)
+        if target_height <= 0:
+            print("Warning: Calculated zero height for rule editor, cannot animate open.")
+            self.rule_edit_widget.setVisible(False) # Hide it again
+            self.rule_editor_container.setMaximumHeight(0) # Collapse container
+            self.add_rule_button.setEnabled(True) # Re-enable button
             return
 
-        current_height = self.rule_edit_widget.height()
+        self.add_rule_button.setEnabled(False)
 
-        # Stop previous animation if it exists and hasn't been cleared
-        if self.rule_editor_animation:
-             self.rule_editor_animation.stop()
-             self.rule_editor_animation = None # Clear immediately after stopping
+        # --- Animate open ---
+        if hasattr(self, 'rule_editor_animation') and self.rule_editor_animation and self.rule_editor_animation.state() == QPropertyAnimation.State.Running:
+            self.rule_editor_animation.stop()
+            self._clear_rule_animation_ref()
 
-        if animate and current_height > 0:
-            self.rule_editor_animation = self._animate_widget_height(self.rule_edit_widget, current_height, 0)
-            self.rule_editor_animation.finished.connect(lambda: self.add_rule_button.setEnabled(True))
-            self.rule_editor_animation.finished.connect(self.rule_edit_widget.clear_fields)
-            # Clear reference *after* this animation finishes
-            self.rule_editor_animation.finished.connect(self._clear_rule_animation_ref)
-            self.rule_editor_animation.start() # Removed DeletionPolicy
+        print("[_show_add_rule_editor] Starting container height animation...")
+        # Animate container height ONLY
+        self.rule_editor_container.setMaximumHeight(0) # Ensure starting height is 0
+        self.rule_editor_animation = QPropertyAnimation(self.rule_editor_container, b"maximumHeight")
+        self.rule_editor_animation.setDuration(250) # Adjust duration if needed
+        self.rule_editor_animation.setStartValue(0)
+        self.rule_editor_animation.setEndValue(target_height)
+        self.rule_editor_animation.setEasingCurve(QEasingCurve.Type.InOutQuad)
+
+        # --- Connect finished signals ---
+        # Ensure inner widget's max height allows it to be seen after container animates
+        self.rule_editor_animation.finished.connect(lambda: self.rule_edit_widget.setMaximumHeight(target_height))
+        self.rule_editor_animation.finished.connect(self.rule_edit_widget.set_focus_on_domains)
+        self.rule_editor_animation.finished.connect(self._clear_rule_animation_ref)
+        # --- Start ---
+        self.rule_editor_animation.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped) # Auto-delete anim
+
+    def _show_edit_rule_editor(self, rule_id: str):
+        """Opens the editor pane pre-filled with data for a specific rule."""
+        print(f"[_show_edit_rule_editor] Request to edit rule ID: {rule_id}")
+        # Close proxy editor if open
+        if self.proxy_edit_widget:
+            self._cancel_proxy_edit(animate=False)
+
+        # Close existing rule editor immediately if a different one is open
+        if self.rule_edit_widget and getattr(self.rule_edit_widget, '_editing_rule_id', None) != rule_id:
+            print(f"[_show_edit_rule_editor] Closing existing editor for rule {getattr(self.rule_edit_widget, '_editing_rule_id', None)}.")
+            self._cancel_rule_edit(animate=False)
+        elif self.rule_edit_widget:
+            print(f"[_show_edit_rule_editor] Editor for rule {rule_id} already open.")
+            self.rule_edit_widget.set_focus_on_domains() # Just focus if already open
+            return
+
+        rule_data = self.rules.get(rule_id)
+        if not rule_data:
+            QMessageBox.warning(self, "Error", f"Rule with ID '{rule_id}' not found.")
+            return
+
+        print(f"[_show_edit_rule_editor] Found rule data: {rule_data}")
+
+        # Create and configure the editor widget
+        self.rule_edit_widget = RuleEditWidget(self, self.proxies, self.profiles, rule_data, self)
+        self.rule_edit_widget.save_rules.connect(self._save_rule_entry)
+        self.rule_edit_widget.cancelled.connect(lambda: self._cancel_rule_edit(animate=True))
+
+        # ---> ADD CHECK HERE <---
+        if not self.rule_edit_widget:
+             print("[_show_edit_rule_editor] Error: Failed to create RuleEditWidget instance.")
+             QMessageBox.critical(self, "Error", "Failed to create rule editor widget.")
+             return
+        # ---> END CHECK <---
+
+        # Create a new opacity effect for this editor
+        self.rule_edit_opacity_effect = QGraphicsOpacityEffect(self.rule_edit_widget)
+        self.rule_edit_widget.setGraphicsEffect(self.rule_edit_opacity_effect)
+        self.rule_edit_opacity_effect.setOpacity(1.0) # Ensure fully opaque
+
+        print("[_show_edit_rule_editor] Rule editor widget created.")
+        # Make sure combo boxes are up-to-date *before* loading data
+        self.rule_edit_widget.update_proxies(self.proxies)
+        self.rule_edit_widget.update_profiles(self.profiles)
+        self.rule_edit_widget.load_data(rule_data) # Load data *after* combos are populated
+
+        # Clear existing layout content safely
+        layout = self.rule_editor_container.layout()
+        if layout:
+            while layout.count():
+                item = layout.takeAt(0)
+                widget = item.widget()
+                if widget:
+                    widget.deleteLater()
+
+        # Add the new editor
+        layout.addWidget(self.rule_edit_widget)
+        print("[_show_edit_rule_editor] Added rule editor to container layout.")
+
+        # ---> Check/Set container visibility/height <---
+        target_height = self._calculate_editor_height(self.rule_edit_widget)
+        print(f"Calculated target height: {target_height}")
+
+        if not self.rule_editor_container.isVisible() or self.rule_editor_container.height() == 0:
+            print("[_show_edit_rule_editor] Container hidden, animating open.")
+            self.rule_editor_container.setMaximumHeight(0) # Ensure starting height is 0
+            self.rule_editor_container.show()
+            self._clear_rule_animation_ref() # Clear previous before starting new
+            self.rule_editor_animation = self._animate_widget_height(self.rule_editor_container, 0, target_height)
+            print("[_show_edit_rule_editor] Starting container height animation...")
         else:
-            self.rule_edit_widget.setMaximumHeight(0)
-            self.rule_edit_widget.setVisible(False)
-            self.rule_edit_widget.clear_fields()
+            # Already visible, potentially resizing (e.g., switching editors)
+            print("[_show_edit_rule_editor] Container visible, animating resize.")
+            start_height = self.rule_editor_container.height()
+            if start_height != target_height:
+                self._clear_rule_animation_ref() # Clear previous before starting new
+                self.rule_editor_animation = self._animate_widget_height(self.rule_editor_container, start_height, target_height)
+                print("[_show_edit_rule_editor] Starting container resize animation...")
+            else:
+                 # Already at target height, just ensure focus
+                 print("[_show_edit_rule_editor] Container already at target height.")
+                 self.rule_edit_widget.set_focus_on_domains()
+                 self.rule_editor_animation = None # No animation needed
+
+        # Only connect/start if an animation was created
+        if self.rule_editor_animation:
+            # --- Connect finished signals ---
+            # Ensure inner widget's max height allows it to be seen after container animates
+            self.rule_editor_animation.finished.connect(lambda: self.rule_edit_widget.setMaximumHeight(target_height))
+            self.rule_editor_animation.finished.connect(self.rule_edit_widget.set_focus_on_domains)
+            self.rule_editor_animation.finished.connect(self._clear_rule_animation_ref)
+            # --- Start ---
+            self.rule_editor_animation.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped) # Auto-delete anim
+        else:
+             # No animation, ensure widget is sized correctly immediately
+             self.rule_edit_widget.setMaximumHeight(target_height)
+
+    def _cancel_rule_edit(self, animate=True):
+        """Hides and cleans up the rule editor widget."""
+        print(f"[Cancel Rule Edit] Called with animate={animate}")
+        if not self.rule_edit_widget or not self.rule_editor_container:
+            print("[Cancel Rule Edit] No editor or container to cancel.")
+            return
+
+        editor_to_close = self.rule_edit_widget
+        container_to_hide = self.rule_editor_container
+
+        # Clear internal reference FIRST
+        self.rule_edit_widget = None
+
+        if animate:
+            print("[Cancel Rule Edit] Animating closed.")
+            start_height = container_to_hide.height()
+            end_height = 0
+            self._clear_rule_animation_ref() # Clear previous before starting new
+
+            self.rule_edit_animation = self._animate_widget_height(container_to_hide, start_height, end_height)
+
+            def cleanup_after_animation():
+                try:
+                    if container_to_hide: # Check if container still exists
+                        container_to_hide.hide()
+                    if editor_to_close: # Check if editor still exists
+                        print("[Cancel Rule Edit] Deleting editor after animation.")
+                        editor_to_close.deleteLater()
+                    # Set focus back to list only after animation finishes
+                    if self.rules_list_widget: # Check if list widget exists
+                        self.rules_list_widget.setFocus()
+                    # Re-enable the add rule button
+                    if hasattr(self, 'add_rule_button'):
+                        self.add_rule_button.setEnabled(True)
+                except RuntimeError as e:
+                     # This can happen if the window is closed during animation
+                     print(f"[Animation Warning] Error in cleanup: {e}")
+                finally:
+                     self._clear_rule_animation_ref() # Clear ref on finish/error
+
+            self.rule_edit_animation.finished.connect(cleanup_after_animation)
+            self.rule_edit_animation.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+
+        else:
+            # No animation, just hide and delete immediately and reliably
+            print("[Cancel Rule Edit] Hiding and deleting immediately (no animation).")
+            container_to_hide.hide() # Hide container first
+
+            # Remove the editor widget from its layout *before* deleting
+            container_layout = container_to_hide.layout()
+            if editor_to_close and container_layout:
+                print("[Cancel Rule Edit] Removing editor widget from layout.")
+                container_layout.removeWidget(editor_to_close)
+                # Explicitly set parent to None before deleteLater
+                editor_to_close.setParent(None)
+                print("[Cancel Rule Edit] Editor widget parent set to None.")
+
+            container_to_hide.setFixedHeight(0) # Set height after potentially removing content
+
+            if editor_to_close:
+                print("[Cancel Rule Edit] Scheduling editor deletion (deleteLater).")
+                editor_to_close.deleteLater()
+
+            # Set focus back to list
+            if self.rules_list_widget:
+                self.rules_list_widget.setFocus()
+                # Ensure list updates its layout if needed
+                self.rules_list_widget.updateGeometry()
+
+        # Always clear focus from any potential leftover input field
+        # Add try-except as the widget might be deleted by the time this runs
+        if editor_to_close and hasattr(editor_to_close, 'domain_input') and editor_to_close.domain_input:
+            try:
+                 # Check if the widget still exists/has C++ peer before accessing clearFocus
+                 if editor_to_close and editor_to_close.isVisible(): # Basic check
+                      editor_to_close.domain_input.clearFocus()
+                      print("[Cancel Rule Edit] Cleared focus from domain input.")
+                 else:
+                      print("[Cancel Rule Edit] Domain input focus clear skipped (widget likely hidden/deleted).")
+            except RuntimeError: # Catches "Internal C++ object already deleted"
+                 print("[Cancel Rule Edit] Could not clear focus, editor already deleted.")
+                 pass # Ignore if already deleted
+
+        # Re-enable the add rule button (whether animated or not)
+        if hasattr(self, 'add_rule_button'):
             self.add_rule_button.setEnabled(True)
-            self.rule_editor_animation = None # Clear reference if hidden instantly
+            print("[Cancel Rule Edit] Re-enabled Add Rule button.")
 
     def _clear_rule_animation_ref(self):
-        """Clear the animation reference."""
+        """Clear the rule animation reference."""
+        print("[Animation] Clearing rule animation reference.")
+        try:
+            # Ensure container stays open and visible if animation finished successfully at non-zero height
+            if self.rule_editor_animation and self.rule_editor_animation.endValue() > 0:
+                self.rule_editor_container.setMaximumHeight(self.rule_editor_animation.endValue())
+                # Make sure the container is visible
+                self.rule_editor_container.setVisible(True)
+                # Ensure the widget itself is visible too
+                if hasattr(self, 'rule_edit_widget') and self.rule_edit_widget:
+                    self.rule_edit_widget.setVisible(True)
+                    # Set maximum height on widget to match container
+                    self.rule_edit_widget.setMaximumHeight(self.rule_editor_animation.endValue())
+            
+            # Safely disconnect any remaining connections
+            if self.rule_editor_animation and hasattr(self.rule_editor_animation, 'finished'):
+                try:
+                    self.rule_editor_animation.finished.disconnect()
+                except:
+                    pass 
+                 
+        except Exception as e:
+            print(f"[Animation Warning] Error in cleanup: {e}")
+        
+        # Always clear the reference
         self.rule_editor_animation = None
 
     def _save_rule_entry(self, domains: list, proxy_id: str, profile_id: str):
-        """
-        Handles saving new rules or updating existing ones.
-        If called in 'Add' mode (editing_id is None) and a domain
-        already exists, it overwrites the existing rule for that domain.
-        """
-        editing_id = self.rule_edit_widget._editing_rule_id # ID from the editor state
-        print(f"[UI Save Rule] Entry called. editing_id='{editing_id}', domains={domains}")
+        """Handles saving a new or edited rule entry."""
+        print(f"[Rule Edit Save] Received save request: Domains={domains}, Proxy={proxy_id}, Profile={profile_id}")
 
-        config_changed = False
-        rules_changed = False
-        needs_list_repopulation = False # Flag to check if UI list needs full refresh
+        if not profile_id:
+             QMessageBox.warning(self, "Save Error", "Cannot save rule: Profile ID is missing.")
+             return
 
-        if not domains:
-            print("[UI Save Rule] Error: No valid domains provided.")
-            return
+        editing_existing = bool(self.rule_edit_widget and self.rule_edit_widget._editing_rule_id)
+        rule_id_to_select = None # ID of the rule to scroll to
 
-        if editing_id: # --- EDIT Mode (Existing logic - should be mostly correct) ---
-            if len(domains) > 1:
-                 QMessageBox.warning(self, "Input Error", "Cannot edit multiple domains at once.")
+        if editing_existing:
+            rule_id = self.rule_edit_widget._editing_rule_id
+            if rule_id not in self.rules:
+                 QMessageBox.critical(self, "Error", f"Cannot save: Rule ID '{rule_id}' not found in internal data.")
                  return
-            domain = domains[0]
+            if len(domains) != 1:
+                 # This should be caught by the editor validation, but double-check
+                 QMessageBox.warning(self, "Save Error", "Cannot edit multiple domains. Please provide only one.")
+                 return
 
-            # Check if the NEW domain conflicts with ANY OTHER existing rule
-            conflict_found = False
-            for existing_id_check, existing_rule_check in self.rules.items():
-                 if existing_rule_check.get('domain') == domain and existing_id_check != editing_id:
-                      conflict_found = True; break
-            if conflict_found:
-                 QMessageBox.warning(self, "Duplicate Rule", f"Another rule for the domain '{domain}' already exists."); return
+            # Update existing rule (ensure 'enabled' state is preserved)
+            self.rules[rule_id]['domain'] = domains[0] # Update domain
+            self.rules[rule_id]['proxy_id'] = proxy_id
+            self.rules[rule_id]['profile_id'] = profile_id
+            print(f"[Rules] Updated rule ID {rule_id}: Domain='{domains[0]}', Proxy='{proxy_id}', Profile='{profile_id}'")
+            rule_id_to_select = rule_id
 
-            # Proceed with update
-            if editing_id in self.rules:
-                 old_rule = self.rules[editing_id].copy()
-                 new_data = {"domain": domain, "proxy_id": proxy_id, "profile_id": profile_id, "enabled": old_rule.get("enabled", True)}
-                 data_actually_changed = (
-                     old_rule.get('domain') != domain or
-                     old_rule.get('proxy_id') != proxy_id or
-                     old_rule.get('profile_id') != profile_id
-                 )
-
-                 if data_actually_changed:
-                     print(f"[UI Save Rule {editing_id}] Data changed. Updating rule '{domain}'.")
-                     rules_changed = True
-                     self.rules[editing_id].update(new_data)
-
-                     # Check engine update need
-                     if old_rule.get('profile_id') != profile_id:
-                        if old_rule.get('profile_id') == self.engine_active_profile_id or \
-                           profile_id == self.engine_active_profile_id or \
-                           old_rule.get('profile_id') is None or \
-                           profile_id is None:
-                              config_changed = True
-
-                     # Update UI widget or flag for repopulation
-                     if editing_id in self.rule_widgets:
-                         self.rule_widgets[editing_id].update_data(self.rules[editing_id], self._get_proxy_name_map(), self._get_profile_name_map())
-                         self._filter_rule_list(self.rule_filter_bar.findChild(QLineEdit).text()) # Re-filter needed if profile affects visibility
-                     else:
-                         needs_list_repopulation = True # Widget wasn't visible, refresh list
-                 else:
-                     print(f"[UI Save Rule {editing_id}] No changes detected.")
-            else:
-                 print(f"[UI Save Rule] Error: Cannot update rule with unknown ID: {editing_id}"); return
-
-        else: # --- ADD or OVERWRITE Mode ---
-            added_count = 0
-            overwritten_count = 0
-
+        else:
+            # Add new rules (one for each domain)
+            new_rule_ids = []
             for domain in domains:
-                existing_rule_id_to_overwrite = None
-                # Find if a rule with this exact domain already exists
-                for rule_id_check, rule_data_check in self.rules.items():
-                    if rule_data_check.get('domain') == domain:
-                        existing_rule_id_to_overwrite = rule_id_check
-                        break
+                 # Check if rule already exists for this domain and profile
+                 existing_id = self._find_rule_by_domain_and_profile(domain, profile_id)
+                 if existing_id:
+                      reply = QMessageBox.question(self, "Duplicate Rule",
+                                                f"A rule for '{domain}' already exists in profile '{self.profiles.get(profile_id, {}).get('name', profile_id)}'.\n\nDo you want to overwrite it?",
+                                                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                                QMessageBox.StandardButton.No)
+                      if reply == QMessageBox.StandardButton.Yes:
+                           # Overwrite existing rule
+                           self.rules[existing_id]['proxy_id'] = proxy_id
+                           # Ensure 'enabled' state is preserved (it's already in self.rules[existing_id])
+                           print(f"[Rules] Overwrote rule ID {existing_id} for domain '{domain}'.")
+                           if rule_id_to_select is None: # Select the first overwritten/new rule
+                                rule_id_to_select = existing_id
+                      else:
+                           print(f"[Rules] Skipped adding duplicate rule for domain '{domain}'.")
+                           continue # Skip to next domain
+                 else:
+                      # Create new rule
+                      new_id = str(uuid.uuid4())
+                      self.rules[new_id] = {
+                          "id": new_id,
+                          "domain": domain,
+                          "proxy_id": proxy_id,
+                          "profile_id": profile_id,
+                          "enabled": True # New rules default to enabled
+                      }
+                      print(f"[Rules] Added new rule ID {new_id} for domain '{domain}'.")
+                      if rule_id_to_select is None: # Select the first new rule added
+                           rule_id_to_select = new_id
 
-                if existing_rule_id_to_overwrite: # --- Overwrite Existing Rule ---
-                    print(f"[UI Save Rule] Overwriting existing rule for domain '{domain}' (ID: {existing_rule_id_to_overwrite})")
-                    old_rule = self.rules[existing_rule_id_to_overwrite].copy()
-                    # Use new data, keep existing enabled state unless explicitly changing it (default to True on overwrite?)
-                    # Let's default to True on overwrite, as if adding anew.
-                    new_data = {"domain": domain, "proxy_id": proxy_id, "profile_id": profile_id, "enabled": True}
+        # --- Refined Save Process ---
+        # Use a nested function to manage the UI updates sequentially
 
-                    data_actually_changed = ( # Check if overwrite changes anything relevant
-                        old_rule.get('proxy_id') != proxy_id or
-                        old_rule.get('profile_id') != profile_id or
-                        old_rule.get('enabled', True) != True # Check if it was disabled before
-                    )
+        def complete_save_process():
+            # 1. Rebuild the list widget with updated data
+            print("[Save Rule] Rebuilding rule list...")
+            self._rebuild_rule_list_safely() # This calls _populate_rule_list and updates count
 
-                    if data_actually_changed:
-                        rules_changed = True # Mark that a change occurred
-                        self.rules[existing_rule_id_to_overwrite].update(new_data) # Update data store
-                        overwritten_count += 1
+            # 2. Schedule scroll to the new/edited item (if applicable)
+            if rule_id_to_select:
+                print(f"[Save Rule] Scheduling scroll to rule ID: {rule_id_to_select}")
+                self._safely_scroll_to_rule(rule_id_to_select)
 
-                        # Check if engine config needs update (profile changed, rule enabled, scope changed)
-                        if old_rule.get('profile_id') != profile_id or \
-                           not old_rule.get('enabled', True) or \
-                           old_rule.get('profile_id') is None or \
-                           profile_id is None:
-                             # Check if the rule (old or new state) affects the active engine profile
-                             if profile_id == self.engine_active_profile_id or profile_id is None or \
-                                old_rule.get('profile_id') == self.engine_active_profile_id:
-                                  config_changed = True
+            # 3. Close editor *after* list is rebuilt and scroll is scheduled
+            #    Use animate=False for immediate closure without animation overlap
+            print("[Save Rule] Closing rule editor...")
+            if self.rule_edit_widget: # Check if it still exists
+                 self._cancel_rule_edit(animate=False)
+            else:
+                 print("[Save Rule] Editor already closed/None.")
 
-                        # Update UI widget or flag for repopulation
-                        if existing_rule_id_to_overwrite in self.rule_widgets:
-                            self.rule_widgets[existing_rule_id_to_overwrite].update_data(self.rules[existing_rule_id_to_overwrite], self._get_proxy_name_map(), self._get_profile_name_map())
-                        else:
-                            needs_list_repopulation = True # Widget wasn't visible
+            # 4. Save settings to persist changes
+            print("[Save Rule] Saving settings...")
+            self.save_settings()
 
-                    else:
-                         print(f"[UI Save Rule] Overwrite for '{domain}' resulted in no data change.")
+            # 5. Show status message
+            action = "Updated" if editing_existing else "Added"
+            domain_text = domains[0] if len(domains) == 1 else f"{len(domains)} domains"
+            self.show_status_message(f"Rule(s) {action}: {domain_text}", 3000)
+            
+            # 6. Re-enable the add rule button
+            if hasattr(self, 'add_rule_button'):
+                self.add_rule_button.setEnabled(True)
+                print("[Save Rule] Re-enabled Add Rule button.")
 
-                else: # --- Add New Rule ---
-                    print(f"[UI Save Rule] Adding new rule for domain: {domain}")
-                    new_rule_id = str(uuid.uuid4())
-                    rule_data = {"id": new_rule_id, "domain": domain, "proxy_id": proxy_id, "profile_id": profile_id, "enabled": True}
-                    self.rules[new_rule_id] = rule_data
-                    rules_changed = True
-                    added_count += 1
-                    needs_list_repopulation = True # Adding new rules always requires repopulation for sorting/visibility
+        # Execute the process (can be direct call now, was for potential delay)
+        complete_save_process()
 
-                    # Check if engine config needs update
-                    if profile_id == self.engine_active_profile_id or profile_id is None:
-                         config_changed = True
-
-            # User feedback after processing all domains
-            if added_count > 0:
-                 profile_display_name = "Global (All Profiles)" if profile_id is None else self.profiles.get(profile_id, {}).get("name", "Unknown")
-                 print(f"Added {added_count} new rule(s) to profile: '{profile_display_name}'.")
-            if overwritten_count > 0:
-                 # Optional: QMessageBox.information(...)
-                 print(f"Overwrote {overwritten_count} existing rule(s) with new settings.")
-
-
-        # --- Post-Save Actions ---
-        if rules_changed:
-             self._cancel_rule_edit(animate=True) # Close editor on successful change
-
-             if needs_list_repopulation:
-                 print("[UI Save Rule] Repopulating rule list.")
-                 self._populate_rule_list() # Refresh the whole list display if needed
-             else:
-                  # If only editing visible items, just filter/update count
-                   if editing_id and editing_id in self.rule_widgets:
-                        self._filter_rule_list(self.rule_filter_bar.findChild(QLineEdit).text())
-                   self._update_rule_count_label() # Still update count
-
-             if config_changed:
-                  print("[UI] Rule change affects engine, updating config.")
-                  self.proxy_engine.update_config(self.get_active_rules(), self.proxies, self.engine_active_profile_id)
-             self.save_settings() # Save changes to disk
+    def _safely_scroll_to_rule(self, rule_id):
+        """Safely attempt to scroll to a rule, with error handling."""
+        try:
+            if rule_id and hasattr(self, 'rules_list_widget'):
+                self._scroll_to_item(self.rules_list_widget, rule_id)
+        except Exception as e:
+            print(f"[Error] Failed to scroll to rule {rule_id}: {e}")
+            # Just log the error, don't affect the user experience
 
     def _delete_rule_entry(self, rule_id: str):
-        """Deletes a rule entry."""
+        """Deletes a rule entry with seamless UI update."""
         if rule_id in self.rules:
-            rule_data = self.rules[rule_id]
-            domain = rule_data.get("domain", "Unknown")
-            rule_profile_id = rule_data.get('profile_id')
-
-            # Remove widget from layout
-            if rule_id in self.rule_widgets:
-                widget_to_remove = self.rule_widgets.pop(rule_id)
-                self.rule_list_layout.removeWidget(widget_to_remove)
-                widget_to_remove.deleteLater()
-
-            # Remove data from store
-            del self.rules[rule_id]
-            print(f"Deleted rule for: {domain} (ID: {rule_id})")
-            self._update_rule_count_label()
-
-            # Update engine if the deleted rule belonged to the currently active profile
-            if rule_profile_id == self.engine_active_profile_id:
-                 print("[UI] Deleted rule was in active profile, updating engine.")
-                 self.proxy_engine.update_config(self.get_active_rules(), self.proxies, self.engine_active_profile_id)
-
-            self.save_settings() # Persist deletion
+            try:
+                print(f"[Rules] Deleting rule ID: {rule_id}")
+                rule_profile_id = self.rules[rule_id].get('profile_id')
+                rule_domain = self.rules[rule_id].get('domain', 'unknown')
+                
+                # Store the profile ID for engine update
+                profile_id = rule_profile_id
+                
+                # First, find and remove the list item directly (without clearing the entire list)
+                target_item = None
+                target_row = -1
+                
+                # Find the list item with this rule_id
+                for row in range(self.rules_list_widget.count()):
+                    item = self.rules_list_widget.item(row)
+                    if item and item.data(Qt.ItemDataRole.UserRole) == rule_id:
+                        target_item = item
+                        target_row = row
+                        break
+                
+                # Remove from the data model first
+                del self.rules[rule_id]
+                print(f"[Rules] Deleted rule ID: {rule_id} (domain: {rule_domain})")
+                
+                # Remove the specific widget and list item
+                if target_item:
+                    # Take the item from the list without deleting the entire list
+                    self.rules_list_widget.takeItem(target_row)
+                    
+                    # Clean up the associated widget
+                    if rule_id in self.rule_widgets:
+                        widget = self.rule_widgets.pop(rule_id, None)
+                        if widget:
+                            # Detach from parent and schedule for deletion
+                            if widget.parent():
+                                widget.setParent(None)
+                            widget.deleteLater()
+                    
+                    # Ensure the item is deleted 
+                    del target_item
+                
+                # Save settings
+                self.save_settings()
+                
+                # Update engine if running and the rule was in the active profile
+                if self.proxy_engine.is_active and profile_id == self._current_active_profile_id:
+                    self.proxy_engine.update_config(self.rules, self.proxies, self._current_active_profile_id)
+                
+                # Update the rule count label
+                self._update_rule_count_label()
+                
+                # Update the rules title label
+                self._update_rules_title_label()
+                
+                # Show confirmation message
+                self.show_status_message("Rule deleted.")
+                
+                # Process events to ensure UI updates
+                QApplication.processEvents()
+                
+            except Exception as e:
+                print(f"[Error] Exception during rule deletion: {e}")
+                self.show_status_message(f"Error deleting rule: {e}")
         else:
-             print(f"Error: Cannot delete rule with unknown ID: {rule_id}")
-
-    def _add_rule_widget(self, rule_data):
-        """Creates and adds a RuleItemWidget to the list layout."""
-        if rule_data['id'] in self.rule_widgets: return # Avoid duplicates
-
-        widget = RuleItemWidget(rule_data, self._get_proxy_name_map(), self._get_profile_name_map(), self, theme_name=self.current_theme)
-        widget.edit_rule.connect(self._show_edit_rule_editor)
-        widget.delete_rule.connect(self._delete_rule_entry)
-        widget.toggle_enabled.connect(self._toggle_rule_enabled) # Connect new signal
-        self.rule_list_layout.addWidget(widget)
-        self.rule_widgets[rule_data['id']] = widget
-        # Initial visibility is handled by the calling function (_populate_rule_list -> _filter_rule_list)
+            self.show_status_message(f"Error: Rule ID '{rule_id}' not found for deletion.")
 
     def _toggle_rule_enabled(self, rule_id: str, enabled: bool):
-        """Handles the enable/disable toggle for a rule."""
+        """Handles the toggle signal from RuleItemWidget."""
         if rule_id in self.rules:
-            rule = self.rules[rule_id]
-            if rule.get("enabled", True) != enabled: # Check if state actually changed
-                print(f"[UI Rule Toggle] Setting rule '{rule['domain']}' (ID: {rule_id}) enabled={enabled}")
-                rule["enabled"] = enabled
-                rules_changed = True
+            if self.rules[rule_id].get("enabled") == enabled:
+                return # No change
 
-                # Check if this rule affects the active engine profile
-                profile_id = rule.get("profile_id")
-                config_changed = (profile_id == self.engine_active_profile_id or profile_id is None)
+            self.rules[rule_id]["enabled"] = enabled
+            print(f"[Rules] Toggled rule '{rule_id}' to enabled={enabled}")
 
-                if config_changed:
-                    print("[UI] Rule toggle affects engine, updating config.")
-                    self.proxy_engine.update_config(self.get_active_rules(), self.proxies, self.engine_active_profile_id)
+            # Update the specific widget's style immediately
+            if rule_id in self.rule_widgets:
+                self.rule_widgets[rule_id].set_enabled_style(enabled)
 
-                self.save_settings() # Save the change
+            # Update engine if running and the rule is in the active profile
+            rule_profile_id = self.rules[rule_id].get('profile_id')
+            if self.proxy_engine.is_active and rule_profile_id == self._current_active_profile_id:
+                 self.proxy_engine.update_config(self.rules, self.proxies, self._current_active_profile_id)
 
-                # Update the specific widget's visual state (optional, if checkbox doesn't auto-update style)
-                if rule_id in self.rule_widgets:
-                     self.rule_widgets[rule_id].update_data(rule, self._get_proxy_name_map(), self._get_profile_name_map())
-
-
+            self.save_settings()
+            self.show_status_message(f"Rule {'enabled' if enabled else 'disabled'}.")
         else:
-             print(f"[UI Rule Toggle] Error: Rule ID {rule_id} not found.")
+            print(f"Error: Cannot toggle rule - ID '{rule_id}' not found.")
 
     def _populate_rule_list(self):
-        """
-        Clears and repopulates the list with rules for the VIEWED profile,
-        INCLUDING global rules (profile_id=None).
-        """
-        view_profile_id = self.rule_profile_selector.currentData()
-        print(f"[UI Populate Rules] Populating for view profile: '{view_profile_id}'")
+        """Populates the QListWidget with rule items for all profiles, regardless of active profile."""
+        try:
+            # Clear list first - disconnects widgets
+            self.rules_list_widget.clear()
+            
+            # Delete old widgets if necessary 
+            widgets_to_remove = []
+            for rule_id, widget in self.rule_widgets.items():
+                try:
+                    if widget.parent():
+                        widget.setParent(None)
+                    # Mark for removal if the rule no longer exists
+                    if rule_id not in self.rules:
+                        widgets_to_remove.append(rule_id)
+                except Exception as e:
+                    print(f"[Error] Widget cleanup error for rule {rule_id}: {e}")
+                    widgets_to_remove.append(rule_id)
+            
+            # Clean up deleted rules' widgets
+            for rule_id in widgets_to_remove:
+                try:
+                    widget = self.rule_widgets.pop(rule_id, None)
+                    if widget:
+                        widget.deleteLater()
+                except Exception as e:
+                    print(f"[Error] Failed to remove widget for rule {rule_id}: {e}")
+            
+            # Don't filter rules by active profile ID - show all rules
+            all_rules = list(self.rules.values())
 
-        # Clear existing widgets first
-        for i in reversed(range(self.rule_list_layout.count())):
-            widget = self.rule_list_layout.itemAt(i).widget()
-            if widget is not None: widget.deleteLater()
-        self.rule_widgets.clear()
+            # Sort rules (e.g., by domain)
+            all_rules.sort(key=lambda r: r.get('domain', '').lower())
 
-        # Determine which rules to display based on VIEW selection
-        rules_to_display = {}
-        if view_profile_id == self.ALL_RULES_PROFILE_ID:
-            # Show all rules when "All" is selected
-            rules_to_display = self.rules.copy()
-            print(f"[UI Populate Rules] Showing all {len(rules_to_display)} rules.")
-        else:
-            # Show rules for the specific profile PLUS global rules (profile_id=None)
-            print(f"[UI Populate Rules] Showing rules for specific profile '{view_profile_id}' and global rules.")
-            for rule_id, rule_data in self.rules.items():
-                rule_assigned_profile = rule_data.get('profile_id')
-                if rule_assigned_profile == view_profile_id or not rule_assigned_profile: # Match specific OR global
-                    rules_to_display[rule_id] = rule_data
-            print(f"[UI Populate Rules] Found {len(rules_to_display)} rules to display.")
+            proxy_map = self._get_proxy_name_map()
+            profile_map = self._get_profile_name_map() # Contains all profile names
 
+            print(f"[Populate] Adding {len(all_rules)} rules to list.")
+            
+            for rule_data in all_rules:
+                rule_id = rule_data.get('id')
+                if not rule_id:
+                    continue
+                    
+                try:
+                    # Create or update the widget
+                    widget = None
+                    if rule_id in self.rule_widgets:
+                        # Update existing widget
+                        widget = self.rule_widgets[rule_id]
+                        widget.update_data(rule_data, proxy_map, profile_map)
+                        widget.set_theme(self.current_theme)
+                    else:
+                        # Create a new widget
+                        widget = RuleItemWidget(rule_data, proxy_map, profile_map, theme_name=self.current_theme)
+                        widget.edit_rule.connect(self._show_edit_rule_editor)
+                        widget.delete_rule.connect(self._delete_rule_entry)
+                        widget.toggle_enabled.connect(self._toggle_rule_enabled)
+                        self.rule_widgets[rule_id] = widget
+                    
+                    # Create list item and add widget to it
+                    item = QListWidgetItem()
+                    item.setData(Qt.ItemDataRole.UserRole, rule_id)
+                    item.setSizeHint(widget.sizeHint())
+                    self.rules_list_widget.addItem(item)
+                    self.rules_list_widget.setItemWidget(item, widget)
+                except Exception as e:
+                    print(f"[Error] Failed to create/add rule widget for {rule_id}: {e}")
 
-        # Apply text filter *after* profile filter
-        filter_text = ""
-        if hasattr(self, 'rule_filter_bar'): # Check if filter bar exists
-            filter_input_widget = self.rule_filter_bar.findChild(QLineEdit)
-            if filter_input_widget: filter_text = filter_input_widget.text()
-
-        # Add widgets for rules matching the current view filter
-        sorted_rule_ids = sorted(rules_to_display.keys(), key=lambda rid: rules_to_display[rid].get("domain", "").lower())
-        for rule_id in sorted_rule_ids:
-             self._add_rule_widget(rules_to_display[rule_id]) # This adds widget to layout and self.rule_widgets
-
-        # Apply text filter AFTER adding widgets
-        self._filter_rule_list(filter_text)
-        # Update count label AFTER filtering
-        self._update_rule_count_label()
+            # Update count and visibility AFTER all items are added
+            QTimer.singleShot(0, self._update_rule_count_label)
+            
+            # Make sure the list always stays visible if it has items
+            has_rules = len(all_rules) > 0
+            if has_rules:
+                self.rules_list_widget.setVisible(True)
+                self.rules_placeholder_widget.setVisible(False)
+            else:
+                self.rules_list_widget.setVisible(False)
+                self.rules_placeholder_widget.setVisible(True)
+                
+            # If we have a filter applied, re-apply it to update visibility
+            if hasattr(self, 'rule_filter_bar'):
+                filter_input = self.rule_filter_bar.findChild(QLineEdit)
+                if filter_input and filter_input.text():
+                    QTimer.singleShot(10, lambda: self._filter_rule_list(filter_input.text()))
+        except Exception as e:
+            print(f"[Error] Rule list population failed: {e}")
+            # Make sure list is still visible in case of error
+            self.rules_list_widget.setVisible(True)
+            self.rules_placeholder_widget.setVisible(False)
 
     def _update_rule_count_label(self):
-        """Updates the label showing the number of rules matching the current view and filter."""
-        visible_count = 0
-        view_profile_id = self.rule_profile_selector.currentData()
-        filter_text = ""
-        if hasattr(self, 'rule_filter_bar'):
-            filter_input_widget = self.rule_filter_bar.findChild(QLineEdit)
-            if filter_input_widget: filter_text = filter_input_widget.text().lower()
+        """Updates the label showing the number of rules visible in the list."""
+        try:
+            # Count only items that are not hidden
+            visible_count = 0
+            for i in range(self.rules_list_widget.count()):
+                item = self.rules_list_widget.item(i)
+                if item and not item.isHidden():
+                    visible_count += 1
 
-        # Iterate through the actual rules data
-        for rule_id, rule_data in self.rules.items():
-            # 1. Check if rule belongs to the currently VIEWED profile
-            rule_assigned_profile = rule_data.get('profile_id')
-            profile_match = (
-                view_profile_id == self.ALL_RULES_PROFILE_ID or # Viewing "All"
-                rule_assigned_profile == view_profile_id or      # Rule matches specific profile
-                not rule_assigned_profile                        # Rule is global (and view isn't "All") - Should this be included if specific profile selected? Yes.
-            )
-            # Refined profile match: Must match view, OR be global, OR view is "All"
-            profile_match_refined = (
-                view_profile_id == self.ALL_RULES_PROFILE_ID or
-                rule_assigned_profile == view_profile_id or
-                not rule_assigned_profile
-            )
+            # Get total count of rules from data model
+            total_count = len(self.rules)
 
-
-            if not profile_match_refined:
-                 continue # Skip rule if it doesn't belong to the current view
-
-            # 2. Check if rule matches the filter text (using logic similar to _filter_list)
-            text_match = True # Assume match if filter is empty
-            if filter_text:
-                search_string = ""
-                # Build search string from rule data
-                for key, value in rule_data.items():
-                    if key not in ['id', 'password', 'status', 'proxy_id', 'profile_id', 'requires_auth', 'enabled'] and value:
-                         search_string += str(value).lower() + " "
-                # Add proxy name
-                if rule_data.get('proxy_id') and rule_data['proxy_id'] in self.proxies:
-                     search_string += self.proxies[rule_data['proxy_id']].get('name', '').lower() + " "
-                # Add profile name (even if None, map has entry for it)
-                search_string += self._get_profile_name_map().get(rule_assigned_profile, '').lower() + " "
-
-                text_match = filter_text in search_string
-
-            # 3. Increment count if both profile and text match
-            if text_match: # Already checked profile_match_refined above
-                visible_count += 1
-
-        self.rules_count_label.setText(f"   ({visible_count} Visible)")
+            # Update the count label text
+            self.rules_count_label.setText(f"{visible_count} rule{'s' if visible_count != 1 else ''}")
+            
+            print(f"[Count] Rules - visible: {visible_count}, total in model: {total_count}")
+            
+            # Determine visibility based on:
+            # 1. Are there any rules in the data model?
+            # 2. Are any rules visible in the list widget?
+            has_rules_in_model = (total_count > 0)
+            has_visible_rules = (visible_count > 0)
+            
+            # Show placeholder when:
+            # - No rules exist at all, OR
+            # - We have rules but none are visible (filtered out)
+            should_show_placeholder = not has_rules_in_model or (has_rules_in_model and not has_visible_rules)
+            
+            # Rules list should be visible when:
+            # - We have at least one visible rule, OR
+            # - We have rules but just need to rebuild the UI (happens during deletion)
+            should_show_list = has_visible_rules or (has_rules_in_model and self.rules_list_widget.count() == 0)
+            
+            # Force correct visibility of UI elements
+            self.rules_list_widget.setVisible(should_show_list and not should_show_placeholder)
+            self.rules_placeholder_widget.setVisible(should_show_placeholder)
+            
+            print(f"[UI] Rule visibility updated - visible: {visible_count}, total: {total_count}, " 
+                  f"showing placeholder: {should_show_placeholder}, showing list: {should_show_list}")
+            
+            # If there are rules in the model but none in the list widget, 
+            # trigger a safe rebuild to ensure UI is in sync with data
+            if has_rules_in_model and self.rules_list_widget.count() == 0:
+                print("[UI] Data model has rules but list widget is empty, triggering rebuild")
+                QTimer.singleShot(0, self._rebuild_rule_list_safely)
+                
+        except Exception as e:
+            print(f"[Error] Failed to update rule count/visibility: {e}")
+            # In case of error, default to showing the list widget
+            self.rules_list_widget.setVisible(True)
+            self.rules_placeholder_widget.setVisible(False)
 
     def _calculate_editor_height(self, editor_widget: QWidget) -> int:
         """Calculate the required height for the editor widget."""
-        # Ensure the widget is visible to get an accurate size hint
-        # Temporarily set max height very large to allow it to expand fully
-        editor_widget.setMaximumHeight(10000) # Allow it to grow
+        # Ensure layout is updated
         editor_widget.layout().activate()
-        editor_widget.adjustSize()
-        height = editor_widget.sizeHint().height()
-        height += 15 # Increased buffer
-        min_height = 180 # Slightly increased minimum
-        calculated_height = max(height, min_height)
-        # Reset max height immediately after calculation (important!)
-        # If it was previously 0 (hidden), keep it 0 until animation starts
-        if editor_widget.maximumHeight() != 0:
-             editor_widget.setMaximumHeight(0) # Reset for animation start
-        print(f"Calculated target height: {calculated_height}") # Debug print
-        return calculated_height
+        # Use layout size hint as it's often more reliable
+        height = editor_widget.layout().sizeHint().height()
+        height += 15 # Buffer
+        # Ensure a minimum height in case calculation fails
+        height = max(height, 150) # Example minimum height
+        print(f"Calculated target height: {height}")
+        return height
 
     def _show_add_proxy_editor(self):
-        if self.rule_edit_widget.isVisible(): self._cancel_rule_edit(animate=False)
+        """Display the proxy editor for adding a new proxy."""
+        # Close rule editor if open
+        if self.rule_edit_widget and self.rule_edit_widget.isVisible():
+            self._cancel_rule_edit(animate=False)
+
+        # Check if already visible
+        if self.proxy_edit_widget.isVisible():
+            return
 
         self.proxy_edit_widget.clear_fields()
+        self.proxy_edit_widget.setVisible(True)
+        self.proxy_editor_container.setMaximumHeight(1) # Allow container expansion
+        QApplication.processEvents()
+
         target_height = self._calculate_editor_height(self.proxy_edit_widget)
-        self.add_proxy_button.setEnabled(False)
-
-        # Store the new animation object
-        self.proxy_editor_animation = self._animate_widget_height(self.proxy_edit_widget, 0, target_height)
-        self.proxy_editor_animation.finished.connect(self.proxy_edit_widget.set_focus_on_name)
-        self.proxy_editor_animation.start() # Removed DeletionPolicy
-
-    def _show_edit_proxy_editor(self, proxy_id: str):
-        if self.rule_edit_widget.isVisible(): self._cancel_rule_edit(animate=False)
-
-        if proxy_id in self.proxies:
-             self.proxy_edit_widget.load_data(self.proxies[proxy_id])
-             # Crucial: ensure widget recalculates layout *after* potential visibility change in load_data
-             QApplication.processEvents() # Process visibility change event
-             target_height = self._calculate_editor_height(self.proxy_edit_widget)
-
-             self.add_proxy_button.setEnabled(False)
-             self.proxy_editor_animation = self._animate_widget_height(self.proxy_edit_widget, 0, target_height)
-             self.proxy_editor_animation.finished.connect(self.proxy_edit_widget.set_focus_on_name)
-             self.proxy_editor_animation.start() # Removed DeletionPolicy
-        else:
-            print(f"Error: Cannot edit proxy with unknown ID: {proxy_id}")
-
-    def _cancel_proxy_edit(self, animate=True):
-        if not self.proxy_edit_widget.isVisible():
-             self.add_proxy_button.setEnabled(True)
+        if target_height <= 0:
+             print("Warning: Calculated zero height for proxy editor.")
+             self.proxy_edit_widget.setVisible(False); self.proxy_editor_container.setMaximumHeight(0)
              return
 
-        current_height = self.proxy_edit_widget.height()
+        self.add_proxy_button.setEnabled(False)
 
-        # Stop previous animation if it exists and hasn't been cleared
-        if self.proxy_editor_animation:
-             self.proxy_editor_animation.stop()
-             self.proxy_editor_animation = None # Clear immediately after stopping
+        if self.proxy_editor_animation and self.proxy_editor_animation.state() == QPropertyAnimation.State.Running:
+            self.proxy_editor_animation.stop(); self._clear_proxy_animation_ref()
+
+        # ---> Animate the proxy container <---
+        self.proxy_editor_container.setMaximumHeight(0) # Start at 0
+        self.proxy_editor_animation = QPropertyAnimation(self.proxy_editor_container, b"maximumHeight")
+        self.proxy_editor_animation.setDuration(250)
+        self.proxy_editor_animation.setStartValue(0)
+        self.proxy_editor_animation.setEndValue(target_height)
+        self.proxy_editor_animation.setEasingCurve(QEasingCurve.Type.InOutQuad)
+
+        self.proxy_editor_animation.finished.connect(lambda: self.proxy_edit_widget.setMaximumHeight(target_height))
+        self.proxy_editor_animation.finished.connect(self.proxy_edit_widget.set_focus_on_name)
+        self.proxy_editor_animation.finished.connect(self._clear_proxy_animation_ref)
+        self.proxy_editor_animation.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+
+    def _show_edit_proxy_editor(self, proxy_id: str):
+        # ... (check proxy_id, close rule editor) ...
+        # ---> Check/Set container visibility/height <---
+        if not self.proxy_edit_widget.isVisible():
+             self.proxy_edit_widget.setVisible(True) # Make inner widget visible
+             self.proxy_editor_container.setMaximumHeight(1) # Allow container expansion
+             start_height = 0
+        else:
+            start_height = self.proxy_editor_container.height()
+
+        QApplication.processEvents()
+        self.proxy_edit_widget.load_data(self.proxies[proxy_id])
+        target_height = self._calculate_editor_height(self.proxy_edit_widget)
+        if target_height <= 0: return
+
+        self.add_proxy_button.setEnabled(False)
+
+        if self.proxy_editor_animation and self.proxy_editor_animation.state() == QPropertyAnimation.State.Running:
+            self.proxy_editor_animation.stop(); self._clear_proxy_animation_ref()
+
+        # ---> Animate container <---
+        self.proxy_editor_container.setMaximumHeight(start_height)
+        self.proxy_editor_animation = QPropertyAnimation(self.proxy_editor_container, b"maximumHeight")
+        self.proxy_editor_animation.setDuration(250)
+        self.proxy_editor_animation.setStartValue(start_height)
+        self.proxy_editor_animation.setEndValue(target_height)
+        self.proxy_editor_animation.setEasingCurve(QEasingCurve.Type.InOutQuad)
+
+        self.proxy_editor_animation.finished.connect(lambda: self.proxy_edit_widget.setMaximumHeight(target_height))
+        self.proxy_editor_animation.finished.connect(self.proxy_edit_widget.set_focus_on_name)
+        self.proxy_editor_animation.finished.connect(self._clear_proxy_animation_ref)
+        self.proxy_editor_animation.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+
+    def _cancel_proxy_edit(self, animate=True):
+        """Hides the proxy editor without saving, optionally animating."""
+        if not self.proxy_edit_widget or not self.proxy_edit_widget.isVisible():
+             if hasattr(self, 'add_proxy_button'): self.add_proxy_button.setEnabled(True)
+             return
+
+        # ---> Use correct container variable <---
+        current_height = self.proxy_editor_container.height()
+        if self.proxy_editor_animation and self.proxy_editor_animation.state() == QPropertyAnimation.State.Running:
+            self.proxy_editor_animation.stop(); self._clear_proxy_animation_ref()
+
+        if hasattr(self, 'add_proxy_button'): self.add_proxy_button.setEnabled(True)
 
         if animate and current_height > 0:
-             # Create and store the new animation object
-             self.proxy_editor_animation = self._animate_widget_height(self.proxy_edit_widget, current_height, 0)
-             self.proxy_editor_animation.finished.connect(lambda: self.add_proxy_button.setEnabled(True))
-             self.proxy_editor_animation.finished.connect(self._clear_proxy_editor_on_cancel)
-             # Clear reference *after* this animation finishes
-             self.proxy_editor_animation.finished.connect(self._clear_proxy_animation_ref)
-             # Remove DeletionPolicy
-             self.proxy_editor_animation.start() # Removed DeletionPolicy
+            # ---> Animate correct container <---
+            local_animation = QPropertyAnimation(self.proxy_editor_container, b"maximumHeight")
+            local_animation.setDuration(250)
+            local_animation.setStartValue(current_height)
+            local_animation.setEndValue(0)
+            local_animation.setEasingCurve(QEasingCurve.Type.InOutQuad)
+
+            self.proxy_editor_animation = local_animation
+            local_animation.finished.connect(self.proxy_edit_widget.clear_fields)
+            local_animation.finished.connect(lambda: self.proxy_edit_widget.setVisible(False))
+            # Set inner widget max height to 0 AFTER animation
+            local_animation.finished.connect(lambda: self.proxy_edit_widget.setMaximumHeight(0))
+            local_animation.finished.connect(self._clear_proxy_animation_ref)
+            local_animation.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
         else:
-             # Hide instantly
-             self.proxy_edit_widget.setMaximumHeight(0)
-             self.proxy_edit_widget.setVisible(False)
-             self._clear_proxy_editor_on_cancel()
-             self.add_proxy_button.setEnabled(True)
-             self.proxy_editor_animation = None # Clear reference if hidden instantly
+            self.proxy_edit_widget.setVisible(False)
+            # ---> Set correct container height <---
+            self.proxy_editor_container.setMaximumHeight(0)
+            self.proxy_edit_widget.setMaximumHeight(0) # Also set inner widget max height
+            self.proxy_edit_widget.clear_fields()
+            self._clear_proxy_animation_ref()
 
     def _clear_proxy_animation_ref(self):
-        """Clear the animation reference."""
+        """Clear the proxy animation reference and ensure final state."""
+        print("[Animation] Clearing proxy animation reference.")
+        # Ensure container stays open if animation finished successfully at non-zero height
+        if self.proxy_editor_animation and self.proxy_editor_animation.endValue() > 0:
+             self.proxy_editor_container.setMaximumHeight(16777215)
         self.proxy_editor_animation = None
 
     def _clear_proxy_editor_on_cancel(self):
@@ -1610,46 +2086,33 @@ class MainWindow(QMainWindow):
          self.proxy_edit_widget.clear_fields()
 
     def _save_proxy_entry(self, proxy_data: dict):
+        """Saves a new or updated proxy entry."""
         is_new = proxy_data.get("id") is None
-        if is_new:
-            proxy_id = str(uuid.uuid4())
-            proxy_data["id"] = proxy_id
-            self.proxies[proxy_id] = proxy_data
-            self._add_proxy_widget(proxy_data)
-            print(f"Added proxy: {proxy_data['name']} (ID: {proxy_id})")
-        else:
-            proxy_id = proxy_data["id"]
-            if proxy_id in self.proxies:
-                self.proxies[proxy_id].update(proxy_data)
-                if proxy_id in self.proxy_widgets:
-                    self.proxy_widgets[proxy_id].update_data(self.proxies[proxy_id])
-                    self.proxy_widgets[proxy_id].setVisible(True)
-                print(f"Updated proxy: {proxy_data['name']} (ID: {proxy_id})")
-            else:
-                print(f"Error: Cannot update proxy with unknown ID: {proxy_id}")
-                self._cancel_proxy_edit()
-                return
+        proxy_id = proxy_data["id"] or str(uuid.uuid4())
+        proxy_data["id"] = proxy_id # Ensure ID is set
 
-        self._cancel_proxy_edit(animate=True) # Use cancel to animate closed
-        # Update dependencies
-        self.rule_edit_widget.update_proxies(self.proxies)
-        self._update_rule_widgets_proxy_names()
-        self.proxy_engine.update_config(self.get_active_rules(), self.proxies, self.engine_active_profile_id)
-        self.save_settings() # Save settings after updates
+        # Add or update status (default to unknown if new)
+        proxy_data['status'] = self.proxies.get(proxy_id, {}).get('status', 'unknown') if not is_new else 'unknown'
 
-        # Add or update the widget in the UI
-        self._add_proxy_widget(self.proxies[proxy_id])
+        self.proxies[proxy_id] = proxy_data
+        print(f"[Proxies] {'Added' if is_new else 'Updated'} proxy: {proxy_data.get('name')} (ID: {proxy_id})")
 
-        # Update other UI elements that might depend on proxy names (like rules)
-        self._update_rule_widgets_proxy_names()
-        self.rule_edit_widget.update_proxies(self.proxies) # Ensure editor dropdown is updated
+        # Update or add the widget in the list
+        self._add_proxy_widget(proxy_data)
 
-        self.show_status_message(f"Saved proxy: {proxy_data['name']}") # Use generic "Saved"
-        self._cancel_proxy_edit(animate=False) # Close editor without animation
+        # Update rules view if proxy names changed
+        if not is_new:
+            self._update_rule_widgets_proxy_names()
 
-        # --- Add this line ---
-        self._update_proxy_count_label()
+        # --- Update Engine Config ALWAYS ---
+        print("[UI] Updating engine config after proxy save...")
+        self.proxy_engine.update_config(self.rules, self.proxies, self._current_active_profile_id)
         # ---
+
+        self._cancel_proxy_edit()
+        self.save_settings()
+        self.proxy_engine.test_proxy(proxy_id)
+        self.show_status_message(f"Proxy '{proxy_data['name']}' saved.")
 
     def _delete_proxy_entry(self, proxy_id: str):
         if proxy_id in self.proxies:
@@ -1717,44 +2180,62 @@ class MainWindow(QMainWindow):
                  # Fallback or error handling if needed
 
     def _handle_toggle_proxy(self, checked: bool):
-        """Handles the toggle button click: Starts/Stops Engine & Sets Proxy"""
-        print(f"[UI Toggle] Request received. Checked: {checked}")
-        if checked:
-            # --- Enable Windows Proxy ---
-            if platform.system() == "Windows" and hasattr(self, '_set_windows_proxy'):
-                port_to_set = self.proxy_engine.listening_port
-                self._set_windows_proxy(enable=True, proxy_host="127.0.0.1", proxy_port=port_to_set)
-            # --- Start Engine ---
-            print(f"[UI Toggle] Starting engine with profile: {self.active_profile_id}")
-            self.engine_active_profile_id = self.active_profile_id # Ensure engine uses the correct active profile
-            active_rules = self.get_active_rules()
-            print(f"[UI Toggle] Passing {len(active_rules)} active rules to engine on start.")
-            self.proxy_engine.update_config(active_rules, self.proxies, self.engine_active_profile_id)
-            if not self.proxy_engine.start(): # Check if start succeeded
-                 print("[UI Toggle] Engine failed to start.")
-                 # Optional: show error message to user
-                 # Reset toggle button state if start fails
-                 self.toggle_proxy_button.blockSignals(True)
-                 self.toggle_proxy_button.setChecked(False)
-                 self.toggle_proxy_button.blockSignals(False)
-                 self._handle_engine_status_update_ui("error") # Update UI to error state
-                 # Also disable windows proxy again if it was enabled
-                 if platform.system() == "Windows" and hasattr(self, '_set_windows_proxy'):
-                      self._set_windows_proxy(enable=False)
+        """Handles the main toggle button click."""
+        if checked: # User wants to turn ON
+            if not self._current_active_profile_id:
+                 QMessageBox.warning(self, "Cannot Start Engine", "No active profile selected. Please select or create a profile.")
+                 self._update_toggle_button_state("inactive") # Force button back visually
+                 return
+            # Update engine with current config before starting
+            # ---> Pass the active profile ID to update_config <---
+            self.proxy_engine.update_config(self.rules, self.proxies, self._current_active_profile_id)
+            success = self.proxy_engine.start()
+            if success:
+                 # Test proxies only if explicitly requested or on first start?
+                 # self.proxy_engine.test_all_proxies() # Optional: test on start
+                 pass
+            else:
+                 self._update_toggle_button_state("error") # Reflect start failure
 
-        else:
-            # --- Stop Engine ---
+            # System proxy (Windows)
+            if IS_WINDOWS and self.enable_system_proxy_checkbox.isChecked():
+                self._set_windows_proxy(True, proxy_port=self.proxy_engine.listening_port)
+
+        else: # User wants to turn OFF
             self.proxy_engine.stop()
-            # --- Disable Windows Proxy ---
-            if platform.system() == "Windows" and hasattr(self, '_set_windows_proxy'):
-                self._set_windows_proxy(enable=False)
-            # --- End Disable ---
+            # System proxy (Windows)
+            if IS_WINDOWS and self.enable_system_proxy_checkbox.isChecked():
+                self._set_windows_proxy(False) # Disable system proxy
 
-    # Renamed method
+        # Update UI based on actual engine state via signals
+        # The status_changed signal will call _handle_engine_status_update_ui
+
+
     def _handle_engine_status_update_ui(self, status: str):
-        """Updates UI elements based on engine status (Tray, Status Bar, Toggle Buttons).""" # Updated docstring
-        print(f"[UI] Engine status UI update: {status}")
-        self.update_tray_status(status) # Update tray icon/tooltip
+        """Update UI elements based on engine status changes."""
+        print(f"[UI] Engine status changed to: {status}")
+        
+        # If we're in the middle of switching profiles, don't show intermediate states
+        if self._is_switching_profiles and (status == "inactive" or status == "stopping"):
+            print("[UI] Ignoring intermediate status during profile switch")
+            return
+        
+        self._update_toggle_button_state(status)
+        self.update_tray_status(status)
+
+        # Update proxy item statuses
+        status_to_set = "unknown"
+        if status == "active":
+             status_to_set = "unknown" # Reset to unknown, let tests update
+             # Optionally trigger tests when engine becomes active
+             # self.proxy_engine.test_all_proxies()
+        elif status == "inactive" or status == "error" or status == "stopping":
+             status_to_set = "inactive" # Set all to inactive visually
+             # Reset test button states if engine stops/errors
+             for proxy_widget in self.proxy_widgets.values():
+                 proxy_widget.set_status(status_to_set)
+
+
         # Update status bar message
         status_text = "Proxy Engine: " + status.capitalize()
         self.status_bar_label.setText(status_text)
@@ -1794,43 +2275,78 @@ class MainWindow(QMainWindow):
 
     def _update_toggle_button_state(self, status: str):
         """Updates the visual state AND ICON of the main toggle button."""
-        is_active = (status == 'active')
+        is_active = (status == 'active' or status == 'starting' or status == 'switching')
+        is_error = (status == 'error')
+        is_starting = (status == 'starting')
+        is_stopping = (status == 'stopping')
+        is_switching = (status == 'switching')
+        
         self.toggle_proxy_button.setChecked(is_active) # Set checked state first
 
         # Determine color and icon path based on NEW state
-        toggle_state = "checked" if is_active else "default"
+        toggle_state = "checked" if is_active else ("error" if is_error else "default")
         toggle_icon_color = self._get_main_icon_color("toggle", state=toggle_state)
-        toggle_icon_path = TOGGLE_ON_ICON_PATH if is_active else TOGGLE_OFF_ICON_PATH
 
-        # Load and set the correctly colored icon
-        toggle_svg = load_and_colorize_svg_content(toggle_icon_path, toggle_icon_color)
-        self.toggle_proxy_button.setIcon(create_icon_from_svg_data(toggle_svg))
+        # Choose the correct icon path based on status
+        toggle_icon_path = None  # For toggle itself
+        if is_error:
+            toggle_icon_path = TOGGLE_ERROR_ICON_PATH # Will now point to toggle-error.svg
+        elif is_active or is_starting or is_switching:
+            toggle_icon_path = TOGGLE_ON_ICON_PATH  # Will now point to toggle-right.svg
+        else: # inactive or stopping
+            toggle_icon_path = TOGGLE_OFF_ICON_PATH # Will now point to toggle-left.svg
 
-        tooltip = "Proxy Engine is ON" if is_active else "Proxy Engine is OFF"
+        # ---> Check if icon file exists before loading <---
+        if os.path.exists(toggle_icon_path):
+            toggle_svg = load_and_colorize_svg_content(toggle_icon_path, toggle_icon_color)
+            if toggle_svg:
+                self.toggle_proxy_button.setIcon(create_icon_from_svg_data(toggle_svg))
+            else:
+                print(f"Warning: Failed to load/colorize toggle icon: {toggle_icon_path}")
+                self.toggle_proxy_button.setIcon(QIcon()) # Clear icon
+                self.toggle_proxy_button.setText("?") # Fallback text
+        else:
+            print(f"Error: Icon file not found at {toggle_icon_path}")
+            self.toggle_proxy_button.setIcon(QIcon()) # Clear icon
+            # Set fallback text based on state
+            fallback_text = "ON" if is_active else ("ERR" if is_error else "OFF")
+            self.toggle_proxy_button.setText(fallback_text)
+        # ---> End check <---
+
+        # Update tooltip
+        if is_error:
+            tooltip = "Proxy Engine ERROR"
+        elif is_switching:
+            tooltip = "Switching Active Profile..."
+        elif is_active:
+            tooltip = "Proxy Engine is ON"
+        elif is_starting:
+            tooltip = "Proxy Engine is Starting..."
+        elif is_stopping:
+            tooltip = "Proxy Engine is Stopping..."
+        else:
+            tooltip = "Proxy Engine is OFF"
+        
         self.toggle_proxy_button.setToolTip(tooltip)
 
     def _handle_close_setting_change(self):
-        """Save the changed close behavior setting immediately."""
-        self.save_settings() # Save all settings when this changes
+        """Update close behavior based on checkbox."""
+        self.close_behavior = "minimize" if self.close_to_tray_checkbox.isChecked() else "exit"
+        self.save_settings() # Save setting immediately
 
     def _handle_proxy_test_result(self, proxy_id: str, is_ok: bool):
-        """Update the status of the specific proxy widget and save it."""
+        """Updates the status of a specific proxy item in the list."""
         if proxy_id in self.proxy_widgets:
-             new_status = "active" if is_ok else "error"
-             self.proxy_widgets[proxy_id].set_status(new_status)
-
-             if not is_ok:
-                 proxy_name = self.proxies.get(proxy_id, {}).get('name', proxy_id)
-                 # Show non-critical warning message box for test failure
-                 # Keep it brief, details are in the console log
-                 QMessageBox.warning(self, "Proxy Test Failed",
-                                     f"Connection test failed for proxy:\n'{proxy_name}'\n\n"
-                                     f"(Check console log for detailed errors)")
-
-             # Persist the test result status
-             if proxy_id in self.proxies:
+            widget = self.proxy_widgets[proxy_id]
+            new_status = "active" if is_ok else "error"
+            widget.set_status(new_status)
+            # Also update the status in the main data dictionary
+            if proxy_id in self.proxies:
                  self.proxies[proxy_id]['status'] = new_status
-                 self.save_settings() # Save changes
+                 # Optionally save settings immediately after a test result? Probably not necessary.
+                 # self.save_settings()
+        else:
+            print(f"[UI Update] Received test result for unknown/hidden proxy ID: {proxy_id}")
 
     # Added method to show status messages
     def show_status_message(self, message: str, timeout: int = 4000):
@@ -1849,202 +2365,406 @@ class MainWindow(QMainWindow):
              self._status_clear_timer.start(timeout)
 
     def _save_hotkey_setting(self):
-        """Save the current hotkey settings preference."""
-        # Check for potential conflicts (simple check)
+        """Save the current hotkey settings preference, checking for conflicts."""
         sequences = [
-            self.toggle_hotkey_edit.keySequence(),
-            self.show_hide_hotkey_edit.keySequence(),
-            self.next_profile_hotkey_edit.keySequence(),
-            self.prev_profile_hotkey_edit.keySequence()
+            (self.toggle_hotkey_edit.keySequence(), "Toggle Engine"),
+            (self.show_hide_hotkey_edit.keySequence(), "Show/Hide Window"),
+            (self.next_profile_hotkey_edit.keySequence(), "Next Profile"),
+            (self.prev_profile_hotkey_edit.keySequence(), "Previous Profile"),
+            (self.quick_add_rule_hotkey_edit.keySequence(), "Quick Add Rule") # Add new hotkey to check
         ]
-        active_sequences = [s for s in sequences if not s.isEmpty()]
-        if len(active_sequences) != len(set(active_sequences)):
-             QMessageBox.warning(self, "Hotkey Conflict", "One or more assigned hotkeys conflict. Please ensure all assigned hotkeys are unique.")
-             # Don't save if conflict detected? Or just warn? Let's just warn for now.
+        active_sequences = {}
+        conflict = False
+        for seq, name in sequences:
+            if not seq.isEmpty():
+                # Use NativeText for saving/displaying, but pynput string for conflict check
+                pynput_str = self._qkeysequence_to_pynput(seq)
+                if pynput_str:
+                    if pynput_str in active_sequences:
+                        QMessageBox.warning(self, "Hotkey Conflict", f"The hotkey '{seq.toString(QKeySequence.SequenceFormat.NativeText)}' conflicts with '{active_sequences[pynput_str]}'.\nPlease ensure all assigned hotkeys are unique.")
+                        conflict = True
+                        break # Stop checking after first conflict
+                    active_sequences[pynput_str] = name
+                else:
+                     # Handle case where conversion failed but sequence wasn't empty
+                     print(f"[Hotkey Save] Warning: Could not convert '{seq.toString()}' for conflict check.")
 
-        print("Hotkey preference saved.")
-        self.save_settings()
-        # Actual registration update is not implemented
+
+        # Only save and re-register if no conflicts found
+        if not conflict:
+            print("[Hotkey Save] Hotkey preferences saved. Re-registering.")
+            self.save_settings() # Save the preferences to file
+            self._load_and_register_hotkeys() # Re-register with the manager
+        else:
+             print("[Hotkey Save] Hotkey preferences not saved or re-registered due to conflict.")
 
     # --- Placeholder functions for profile switching ---
     def _switch_to_next_profile(self):
-        """Switches the active profile to the next one in the list (wraps around)."""
-        # This would be called by the global hotkey listener (not implemented)
-        print("[Hotkey Action] Switching to next profile (Not fully implemented)")
-        current_index = self.rule_profile_selector.currentIndex()
-        count = self.rule_profile_selector.count()
-        if count <= 1: return # No profiles or only "All"
+        """Switches the active profile to the next one in the list."""
+        if not self.profiles:
+            self.show_status_message("No profiles available to switch.", 3000)
+            return
+
+        # Use active_profile_combo for cycling
+        current_index = self.active_profile_combo.currentIndex()
+        count = self.active_profile_combo.count()
+
+        if count <= 1:
+            self.show_status_message("Only one profile exists.", 3000)
+            return
 
         next_index = (current_index + 1) % count
-        # If "All" is first, skip it when cycling from last profile
-        if current_index == count - 1 and self.rule_profile_selector.itemData(0) == self.ALL_RULES_PROFILE_ID:
-             next_index = 1 % count # Go to the first *real* profile
+        self.active_profile_combo.setCurrentIndex(next_index)
+        # Trigger the handler manually as programmatic changes might not emit currentIndexChanged
+        self._handle_active_profile_change(next_index)
+        new_profile_name = self.active_profile_combo.currentText()
+        self.show_status_message(f"Switched to profile: {new_profile_name}", 3000)
+        print(f"[Hotkey Action] Switched to next profile: {new_profile_name}")
 
-        self.rule_profile_selector.setCurrentIndex(next_index) # Triggers _handle_active_profile_change
 
     def _switch_to_prev_profile(self):
-        """Switches the active profile to the previous one (wraps around)."""
-        # This would be called by the global hotkey listener (not implemented)
-        print("[Hotkey Action] Switching to previous profile (Not fully implemented)")
-        current_index = self.rule_profile_selector.currentIndex()
-        count = self.rule_profile_selector.count()
-        if count <= 1: return
+        """Switches the active profile to the previous one in the list."""
+        if not self.profiles:
+            self.show_status_message("No profiles available to switch.", 3000)
+            return
+
+        # Use active_profile_combo for cycling
+        current_index = self.active_profile_combo.currentIndex()
+        count = self.active_profile_combo.count()
+
+        if count <= 1:
+            self.show_status_message("Only one profile exists.", 3000)
+            return
 
         prev_index = (current_index - 1 + count) % count
-        # If "All" is first, handle wrap-around from first real profile
-        if current_index == 1 and self.rule_profile_selector.itemData(0) == self.ALL_RULES_PROFILE_ID:
-            prev_index = count - 1 # Go to last profile
-        elif current_index == 0 and self.rule_profile_selector.itemData(0) == self.ALL_RULES_PROFILE_ID:
-            prev_index = count -1 # Wrap from "All" to last
-
-        self.rule_profile_selector.setCurrentIndex(prev_index) # Triggers _handle_active_profile_change
+        self.active_profile_combo.setCurrentIndex(prev_index)
+        # Trigger the handler manually
+        self._handle_active_profile_change(prev_index)
+        new_profile_name = self.active_profile_combo.currentText()
+        self.show_status_message(f"Switched to profile: {new_profile_name}", 3000)
+        print(f"[Hotkey Action] Switched to previous profile: {new_profile_name}")
 
     # --- Profile Management Methods ---
 
     def _update_profile_selectors(self):
-        """Update profile dropdowns in Rules page and Settings page."""
-        # Preserve current selections
-        current_rule_profile_id = self.rule_profile_selector.currentData()
-        current_settings_profile_id = self.profile_list_widget.currentData()
+        """Updates profile selectors (main active combo and profile list widget)."""
+        print("[UI] Updating profile selectors...")
 
-        self.rule_profile_selector.blockSignals(True) # <<< Block rule selector signals
+        # Store current selections to restore if possible
+        current_active_id = self._current_active_profile_id # Use the internal state variable
+
+        # ---> Correctly get data from QListWidget's current *item* <---
+        current_list_item = self.profile_list_widget.currentItem()
+        current_list_id = current_list_item.data(Qt.ItemDataRole.UserRole) if current_list_item else None
+        # <--- End correction ---
+
+        # --- Update Main Active Profile ComboBox ---
+        self.active_profile_combo.blockSignals(True)
+        self.active_profile_combo.clear()
+        if self.profiles:
+            sorted_profiles = sorted(self.profiles.items(), key=lambda item: item[1].get('name', '').lower())
+            for profile_id, profile_data in sorted_profiles:
+                self.active_profile_combo.addItem(profile_data.get('name', 'Unnamed'), profile_id)
+            # Restore selection
+            idx = self.active_profile_combo.findData(current_active_id)
+            self.active_profile_combo.setCurrentIndex(max(0, idx)) # Select first if not found
+        else:
+             self.active_profile_combo.addItem("No Profiles", None) # Placeholder
+        self.active_profile_combo.blockSignals(False)
+
+        # --- Update Settings Page Profile List Widget ---
         self.profile_list_widget.blockSignals(True)
-        self.rule_profile_selector.clear()
         self.profile_list_widget.clear()
-
-        # Add "All Rules" option to Rules page selector ONLY
-        self.rule_profile_selector.addItem(self.ALL_RULES_PROFILE_NAME, self.ALL_RULES_PROFILE_ID)
-
-        # Add actual profiles, sorted by name
-        sorted_profiles = sorted(self.profiles.items(), key=lambda item: item[1].get('name', '').lower())
-        for profile_id, profile_data in sorted_profiles:
-            name = profile_data.get('name', f"Profile {profile_id[:6]}...")
-            self.rule_profile_selector.addItem(name, profile_id)
-            self.profile_list_widget.addItem(name, profile_id)
-
-        # Restore selection if possible, defaulting intelligently
-        rule_idx = self.rule_profile_selector.findData(current_rule_profile_id or self.active_profile_id or self.ALL_RULES_PROFILE_ID)
-        settings_idx = self.profile_list_widget.findData(current_settings_profile_id)
-
-        self.rule_profile_selector.setCurrentIndex(max(0, rule_idx))
-        self.profile_list_widget.setCurrentIndex(max(0, settings_idx))
-
-        self.rule_profile_selector.blockSignals(False) # <<< Unblock rule selector signals
+        if self.profiles:
+            sorted_profiles_list = sorted(self.profiles.items(), key=lambda item: item[1].get('name', '').lower())
+            for profile_id, profile_data in sorted_profiles_list:
+                item = QListWidgetItem(profile_data.get('name', 'Unnamed'))
+                item.setData(Qt.ItemDataRole.UserRole, profile_id)
+                self.profile_list_widget.addItem(item)
+            # Restore selection
+            new_row_to_select = -1
+            for i in range(self.profile_list_widget.count()):
+                if self.profile_list_widget.item(i).data(Qt.ItemDataRole.UserRole) == current_list_id:
+                     new_row_to_select = i
+                     break
+            self.profile_list_widget.setCurrentRow(max(0, new_row_to_select)) # Select first if not found
         self.profile_list_widget.blockSignals(False)
+        
+        # --- Update Tray Menu Profiles ---
+        if hasattr(self, 'profiles_menu'):
+            # Clear previous actions
+            self.profiles_menu.clear()
+            if hasattr(self, 'profile_action_group'):
+                # Remove old actions from the group
+                for action in self.profile_action_group.actions():
+                    self.profile_action_group.removeAction(action)
+            
+            # Add profile actions
+            if self.profiles:
+                sorted_profiles = sorted(self.profiles.items(), key=lambda item: item[1].get('name', '').lower())
+                for profile_id, profile_data in sorted_profiles:
+                    profile_name = profile_data.get('name', 'Unnamed')
+                    profile_action = QAction(profile_name, self)
+                    profile_action.setCheckable(True)
+                    profile_action.setData(profile_id)
+                    # Check if this is the current active profile
+                    if profile_id == current_active_id:
+                        profile_action.setChecked(True)
+                    # Add to action group and menu
+                    self.profile_action_group.addAction(profile_action)
+                    self.profiles_menu.addAction(profile_action)
+                    # Connect action to handler - using a method to avoid variable capture issues
+                    profile_action.triggered.connect(self._create_profile_action_handler(profile_id))
 
-        self._update_profile_button_states()
-        self._update_rule_count_label()
+        # Update button states based on list selection AFTER repopulating
+        # Pass the current item itself to the handler
+        self._update_profile_button_states(self.profile_list_widget.currentItem(), None) # Call with current item
 
-    def _update_profile_button_states(self):
-        """Enable/disable Rename/Delete buttons based on selection."""
-        selected_profile_id = self.profile_list_widget.currentData()
-        # Can only rename/delete actual profiles, not the "All Rules" concept
-        can_modify = selected_profile_id is not None and selected_profile_id != self.ALL_RULES_PROFILE_ID
-        self.rename_profile_button.setEnabled(can_modify)
-        self.delete_profile_button.setEnabled(can_modify)
+        # Update rules title label AFTER selectors are updated
+        self._update_rules_title_label()
+
+        print(f"[UI] Profile selectors updated. Active: {self.active_profile_combo.currentText()}, List Selected: {self.profile_list_widget.currentItem().text() if self.profile_list_widget.currentItem() else 'None'}")
+
+    def _handle_tray_profile_selection(self, profile_id: str):
+        """Handle profile selection from the tray menu."""
+        if not profile_id or profile_id not in self.profiles:
+            print(f"[Profile] Error: Invalid profile ID selected from tray: {profile_id}")
+            return
+        
+        if profile_id == self._current_active_profile_id:
+            print(f"[Profile] Profile '{profile_id}' already active.")
+            return
+        
+        print(f"[Tray] Profile selected from tray menu: {self.profiles[profile_id].get('name', 'Unknown')}")
+        
+        # Find the profile index in the combo box
+        idx = self.active_profile_combo.findData(profile_id)
+        if idx >= 0:
+            # This will trigger the normal profile change handler
+            self.active_profile_combo.setCurrentIndex(idx)
+        else:
+            print(f"[Profile] Error: Could not find profile '{profile_id}' in combo box")
+
+    def _update_profile_button_states(self, current_item: QListWidgetItem | None, previous_item: QListWidgetItem | None):
+        """
+        Enable/disable Rename/Delete buttons based on selection in QListWidget.
+        Accepts QListWidgetItem arguments.
+        """
+        selected_profile_id = None
+        if current_item: # Check if the current item is valid (not None)
+            selected_profile_id = current_item.data(Qt.ItemDataRole.UserRole)
+        print(f"DEBUG: _update_profile_button_states (QListWidget) - Selected ID: {selected_profile_id}")
+
+        # Determine if buttons should be enabled (only for actual profiles)
+        # Check if the selected_profile_id exists in our profiles dictionary
+        can_modify = selected_profile_id is not None and selected_profile_id in self.profiles
+
+        # Ensure buttons exist before trying to enable/disable them
+        if hasattr(self, 'rename_profile_button'):
+            self.rename_profile_button.setEnabled(can_modify)
+        if hasattr(self, 'delete_profile_button'):
+            # Add extra check: Don't allow deleting the *last* profile
+            can_delete = can_modify and len(self.profiles) > 1
+            self.delete_profile_button.setEnabled(can_delete)
 
     def _handle_active_profile_change(self, index: int):
-        """Handles selection change in the main profile selector."""
-        selected_profile_id = self.rule_profile_selector.itemData(index)
-        if selected_profile_id is None: # This case should ideally not happen if setup correctly
-             print("[UI Profile Change] Error: Selected profile data is None.")
+        """Called when the active profile combo box selection changes."""
+        if index < 0: return # Should not happen with valid combo
+
+        new_profile_id = self.active_profile_combo.itemData(index)
+
+        if not new_profile_id or new_profile_id not in self.profiles:
+             print(f"[Profile] Error: Selected invalid profile ID '{new_profile_id}' at index {index}.")
+             # Revert selection? Find first valid? For now, do nothing.
              return
 
-        # Update the active profile ID used for display and potentially saving
-        # "__all__" is for viewing, the actual saved active profile is a specific one or default
-        if selected_profile_id != self.ALL_RULES_PROFILE_ID:
-             self.active_profile_id = selected_profile_id
-             print(f"[UI Profile Change] View changed. Set active profile to: {self.active_profile_id}")
-             self.save_settings() # Save the newly selected active profile
+        if new_profile_id == self._current_active_profile_id:
+            print(f"[Profile] Profile '{new_profile_id}' already active.")
+            return # No change
+
+        # --- Update State ---
+        print(f"[Profile] Switching active profile to: {new_profile_id} ({self.profiles[new_profile_id].get('name', 'N/A')})")
+        self._current_active_profile_id = new_profile_id
+        
+        # --- Update Tray Menu ---
+        if hasattr(self, 'profile_action_group'):
+            for action in self.profile_action_group.actions():
+                action_profile_id = action.data()
+                action.setChecked(action_profile_id == new_profile_id)
+
+        # --- Update Engine (if active) ---
+        engine_was_active = self.proxy_engine.is_active
+        if engine_was_active:
+            # Set profile switching flag
+            self._is_switching_profiles = True
+            
+            # Immediately update UI to "switching" status to avoid flickering
+            # This prevents "stopping" and "inactive" states from being shown to the user
+            self._handle_engine_status_update_ui("switching")
+            self.show_status_message(f"Switching to profile: {self.profiles[new_profile_id]['name']}...", 5000)
+            
+            print("[Profile] Restarting proxy engine to close all connections and use new active profile rules...")
+            # First stop the engine to close all connections
+            self.proxy_engine.stop()
+            # Wait a brief moment to ensure all connections are properly closed
+            QTimer.singleShot(100, lambda: self._restart_engine_with_new_profile())
         else:
-             # Don't change self.active_profile_id when viewing "All", but maybe update engine?
-             # Decide if engine should switch to "All" or stay on last selected profile?
-             # Let's keep engine on the *specifically selected* active profile.
-             print(f"[UI Profile Change] Viewing 'All Rules'. Engine remains on profile: {self.engine_active_profile_id}")
-             pass # Keep self.active_profile_id as the last *real* selected profile
+            # If engine wasn't active, just update the configuration
+            self.proxy_engine.update_config(self.rules, self.proxies, self._current_active_profile_id)
 
-        # Option 1: Update Engine immediately when VIEW changes
-        # self.engine_active_profile_id = selected_profile_id if selected_profile_id != self.ALL_RULES_PROFILE_ID else "__all__" # Use __all__ for engine if viewing All
-        # print(f"[UI Profile Change] Updating engine to use rules from profile: {self.engine_active_profile_id}")
-        # self.proxy_engine.update_config(self.get_active_rules(), self.proxies, self.engine_active_profile_id)
+        # --- Update UI ---
+        # Rules display doesn't change when switching profiles since we show all rules
+        # BUT we need to update the title label to show active profile
+        self._update_rules_title_label()
+        
+        # ---> Pass current item from profile_list_widget to the handler <---
+        self._update_profile_button_states(self.profile_list_widget.currentItem(), None)
+        # Clear rule filter text if applicable
+        if hasattr(self, 'rule_filter_bar'):
+            filter_input = self.rule_filter_bar.findChild(QLineEdit)
+            if filter_input:
+                filter_input.clear()
 
-        # Option 2: Engine only uses the explicitly saved `self.active_profile_id`
-        # (Handled by `_handle_toggle_proxy` and initial load) - Let's stick with this for now.
+        # --- Persist Change ---
+        self.save_settings()
+        if not engine_was_active:
+            self.show_status_message(f"Switched to profile: {self.profiles[new_profile_id]['name']}")
 
-        # Repopulate rule list based on the *selected view*
-        self._populate_rule_list() # Filters based on selected_profile_id
-        self._update_rule_count_label()
+    def _restart_engine_with_new_profile(self):
+        """Helper method to restart the engine with the current active profile after stopping it."""
+        # Update the engine with the new profile's rules
+        self.proxy_engine.update_config(self.rules, self.proxies, self._current_active_profile_id)
+        # Start the engine again
+        self.proxy_engine.start()
+        # Update system proxy settings if enabled
+        if hasattr(self, 'enable_system_proxy_checkbox') and self.enable_system_proxy_checkbox.isChecked():
+            self._set_windows_proxy(True, "127.0.0.1", self.proxy_engine.listening_port, "<local>")
+        
+        # We will let the normal engine status signal handling update the UI when the engine is fully active
+        # This avoids setting the status prematurely
+        
+        # Clear profile switching flag only after the engine is restarted
+        # The status signal will update the UI accordingly
+        self._is_switching_profiles = False
+        
+        # Show success message
+        self.show_status_message(f"Successfully switched to profile: {self.profiles[self._current_active_profile_id]['name']}", 3000)
 
     def _add_profile(self):
-        text, ok = QInputDialog.getText(self, "New Profile", "Enter profile name:")
-        if ok and text:
-             profile_name = text.strip()
-             if profile_name:
-                  # Check for duplicate name
-                  if any(p.get('name') == profile_name for p in self.profiles.values()):
-                       QMessageBox.warning(self, "Duplicate Name", f"A profile named '{profile_name}' already exists.")
-                       return
-                  profile_id = str(uuid.uuid4())
-                  self.profiles[profile_id] = {'name': profile_name}
-                  print(f"Added profile '{profile_name}' (ID: {profile_id})")
-                  self._update_profile_selectors()
-                  # Select the newly added profile in settings list
-                  new_index = self.profile_list_widget.findData(profile_id)
-                  if new_index != -1: self.profile_list_widget.setCurrentIndex(new_index)
-                  self.save_settings()
+        """Adds a new profile."""
+        profile_name, ok = QInputDialog.getText(self, "New Profile", "Enter name for the new profile:")
+        if ok and profile_name:
+            profile_name = profile_name.strip()
+            if not profile_name:
+                 QMessageBox.warning(self, "Invalid Name", "Profile name cannot be empty.")
+                 return
+            # Check for duplicate names
+            if any(p.get('name', '').lower() == profile_name.lower() for p in self.profiles.values()):
+                 QMessageBox.warning(self, "Duplicate Name", "A profile with this name already exists.")
+                 return
+
+            new_id = str(uuid.uuid4())
+            self.profiles[new_id] = {"id": new_id, "name": profile_name}
+            print(f"[Profile] Added profile: {profile_name} (ID: {new_id})")
+
+            # Refresh UI selectors
+            self._update_profile_selectors()
+            # Set the new profile as active
+            new_index = self.active_profile_combo.findData(new_id)
+            if new_index != -1:
+                self.active_profile_combo.setCurrentIndex(new_index)
+                # Trigger the handler to update everything else
+                # self._handle_active_profile_change(new_index) # setCurrentIndex should trigger it
+
+            self.save_settings()
+        elif ok: # User pressed OK but entered no name
+             QMessageBox.warning(self, "Invalid Name", "Profile name cannot be empty.")
 
     def _rename_profile(self):
-        current_id = self.profile_list_widget.currentData()
-        if not current_id or current_id not in self.profiles: return
+        """Handles renaming the selected profile."""
+        selected_item = self.profile_list_widget.currentItem()
+        if not selected_item:
+            QMessageBox.warning(self, "Rename Profile", "Please select a profile to rename.")
+            return
 
-        current_name = self.profiles[current_id].get('name', '')
-        text, ok = QInputDialog.getText(self, "Rename Profile", "Enter new profile name:", text=current_name)
-        if ok and text:
-             new_name = text.strip()
-             if new_name and new_name != current_name:
-                  # Check for duplicate name
-                  if any(p_id != current_id and p.get('name') == new_name for p_id, p in self.profiles.items()):
-                       QMessageBox.warning(self, "Duplicate Name", f"A profile named '{new_name}' already exists.")
-                       return
-                  self.profiles[current_id]['name'] = new_name
-                  print(f"Renamed profile ID {current_id} to '{new_name}'")
-                  self._update_profile_selectors()
-                  # Re-select the renamed profile
-                  renamed_index = self.profile_list_widget.findData(current_id)
-                  if renamed_index != -1: self.profile_list_widget.setCurrentIndex(renamed_index)
-                  self.save_settings()
+        # ---> Correctly get data from QListWidget <---
+        profile_id = selected_item.data(Qt.ItemDataRole.UserRole) # Get data using UserRole
+        if not profile_id or profile_id not in self.profiles:
+            QMessageBox.critical(self, "Error", "Could not find data for the selected profile.")
+            return
+
+        current_name = self.profiles[profile_id].get('name', '')
+        new_name, ok = QInputDialog.getText(self, "Rename Profile",
+                                            f"Enter new name for '{current_name}':",
+                                            QLineEdit.EchoMode.Normal, current_name)
+
+        if ok and new_name:
+            if new_name != current_name:
+                # Check for duplicate name
+                if any(p_id != profile_id and p.get('name', '').lower() == new_name.lower() for p_id, p in self.profiles.items()): # Case-insensitive check
+                    QMessageBox.warning(self, "Duplicate Name", f"A profile named '{new_name}' already exists.")
+                    return
+                self.profiles[profile_id]['name'] = new_name
+                print(f"Renamed profile ID {profile_id} to '{new_name}'")
+                self._update_profile_selectors() # This will re-select the current item
+                self.save_settings()
 
     def _delete_profile(self):
-        profile_id = self.profile_list_widget.currentData()
-        if not profile_id or profile_id not in self.profiles: return
+        """Deletes the currently selected profile."""
+        # Get selected profile from profile_list_widget
+        selected_item = self.profile_list_widget.currentItem()
+        if not selected_item:
+            QMessageBox.warning(self, "No Profile Selected", "Please select a profile to delete.")
+            return
 
-        profile_name = self.profiles[profile_id].get('name', 'Unknown')
-        reply = QMessageBox.question(self, "Delete Profile",
-                                     f"Are you sure you want to delete the profile '{profile_name}'?\n"
-                                     f"Rules associated with this profile will be kept but become inactive unless reassigned.",
-                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                                     QMessageBox.StandardButton.No)
+        # Get the profile ID from the selected item
+        profile_to_delete_id = selected_item.data(Qt.ItemDataRole.UserRole)
+        if not profile_to_delete_id or profile_to_delete_id not in self.profiles:
+            QMessageBox.warning(self, "Error", "Could not find data for the selected profile.")
+            return
+
+        # Check if this is the active profile
+        if profile_to_delete_id == self._current_active_profile_id:
+            QMessageBox.warning(self, "Cannot Delete Active Profile", 
+                               "You cannot delete the currently active profile.\nPlease switch to another profile first.")
+            return
+
+        # Prevent deleting the last profile
+        if len(self.profiles) <= 1:
+             QMessageBox.warning(self, "Cannot Delete", "Cannot delete the last profile.")
+             return
+
+        profile_to_delete_name = self.profiles[profile_to_delete_id].get('name', 'N/A')
+
+        reply = QMessageBox.question(
+            self, "Confirm Delete",
+            f"Are you sure you want to delete the profile '{profile_to_delete_name}'?\n\n"
+            f"All rules associated with this profile will also be permanently deleted.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel)
 
         if reply == QMessageBox.StandardButton.Yes:
-             print(f"Deleting profile '{profile_name}' (ID: {profile_id})")
-             del self.profiles[profile_id]
+            print(f"[Profile] Deleting profile: {profile_to_delete_name} (ID: {profile_to_delete_id})")
+            del self.profiles[profile_to_delete_id]
 
-             # Find rules associated with this profile
-             rules_to_clear_profile = [rid for rid, rdata in self.rules.items() if rdata.get('profile_id') == profile_id]
-             if rules_to_clear_profile:
-                  print(f"Setting profile to 'None' for {len(rules_to_clear_profile)} rules.")
-                  for rule_id in rules_to_clear_profile:
-                       if rule_id in self.rules:
-                            self.rules[rule_id]['profile_id'] = None
+            # Delete associated rules
+            rules_to_delete = [rule_id for rule_id, rule_data in self.rules.items()
+                               if rule_data.get('profile_id') == profile_to_delete_id]
+            if rules_to_delete:
+                 print(f"[Profile] Deleting {len(rules_to_delete)} rules associated with profile '{profile_to_delete_name}'.")
+                 for rule_id in rules_to_delete:
+                      del self.rules[rule_id]
+                 # Clear corresponding widgets if they exist (though list will be repopulated)
+                 for rule_id in rules_to_delete:
+                      if rule_id in self.rule_widgets:
+                           self.rule_widgets.pop(rule_id).deleteLater()
 
-             # If the deleted profile was active, switch active profile VIEW and ENGINE to "All"
-             if self.active_profile_id == profile_id:
-                  print("[UI] Deleted profile was active, switching to 'All Rules'.")
-                  self._set_active_profile(self.ALL_RULES_PROFILE_ID) # Use the conceptual ID for setting
+            # Update UI
+            self._update_profile_selectors() # Update combo box content
 
-             self._update_profile_selectors() # Update UI lists
-             self._populate_rule_list() # Repopulate rules (will now show rules for active profile)
-             self.save_settings() # Save changes
+            # Persist
+            self.save_settings()
+            self.show_status_message(f"Profile '{profile_to_delete_name}' deleted.")
 
     # --- Animation Helper ---
     def _animate_widget_height(self, widget, start_height, end_height, duration=250):
@@ -2067,64 +2787,152 @@ class MainWindow(QMainWindow):
 
     # --- Hotkey Methods ---
     def _clear_hotkey(self, key_sequence_edit_widget: QKeySequenceEdit):
-        """Clears the key sequence in the specified widget."""
+        """Clears the key sequence in the specified widget and saves."""
         key_sequence_edit_widget.clear()
-        self._save_hotkey_setting() # Save the cleared setting
+        # Call the specific save function for hotkeys to check conflicts
+        self._save_hotkey_setting()
 
     # --- Filter Widgets ---
-    def _create_filter_bar(self, placeholder_text: str, filter_slot) -> QWidget:
-        """Creates a simple filter bar widget."""
+    def _create_filter_bar(self, placeholder_text: str, filter_slot, include_count_label=False) -> QWidget:
+        """Creates a simple filter bar widget with optional count label."""
         filter_widget = QWidget()
         filter_layout = QHBoxLayout(filter_widget)
         filter_layout.setContentsMargins(15, 5, 15, 5) # Less vertical margin
-        self.filter_input = QLineEdit()
-        self.filter_input.setPlaceholderText(placeholder_text)
-        self.filter_input.setClearButtonEnabled(True)
-        self.filter_input.textChanged.connect(filter_slot)
-        filter_layout.addWidget(self.filter_input)
+        filter_input = QLineEdit()  # Local variable instead of self attribute
+        filter_input.setPlaceholderText(placeholder_text)
+        filter_input.setClearButtonEnabled(True)
+        filter_input.textChanged.connect(filter_slot)
+        filter_layout.addWidget(filter_input)
+        
+        # Add a count label if requested
+        if include_count_label:
+            # Create a label to show count (will be populated elsewhere)
+            count_label = QLabel("0 rules")
+            count_label.setObjectName("CountLabel")
+            count_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            count_label.setContentsMargins(0, 0, 0, 0)
+            filter_layout.addWidget(count_label)
+            # Store this so it can be updated from _update_rule_count_label
+            self.rules_count_label = count_label
+        
         return filter_widget
 
-    # --- Filtering Methods ---
-    def _filter_list(self, filter_text: str, item_widgets: dict, get_widget_data_func):
-        """Generic list filtering logic."""
-        filter_lower = filter_text.lower()
-        for item_id, widget in item_widgets.items():
-            data_dict = get_widget_data_func(item_id)
-            if not data_dict:
-                 widget.setVisible(False) # Hide if data missing
-                 continue
-
-            # Combine relevant fields into a searchable string
-            search_string = ""
-            for key, value in data_dict.items():
-                 # Include relevant fields like name, domain, address, type, profile name etc.
-                 # Exclude sensitive or irrelevant fields like password, id
-                 if key not in ['id', 'password', 'status', 'proxy_id', 'profile_id', 'requires_auth'] and value:
-                      search_string += str(value).lower() + " "
-            # Add related names (proxy/profile) if applicable
-            if 'proxy_id' in data_dict and data_dict['proxy_id'] in self.proxies:
-                 search_string += self.proxies[data_dict['proxy_id']].get('name', '').lower() + " "
-            if 'profile_id' in data_dict and data_dict['profile_id'] in self.profiles:
-                 search_string += self.profiles[data_dict['profile_id']].get('name', '').lower() + " "
-
-            widget.setVisible(filter_lower in search_string)
-        # Update counts after filtering (optional, or keep total count?)
-        # self._update_rule_count_label()
-        # self._update_proxy_count_label()
-
+    # --- Specific filtering methods directly implemented for each list ---
     def _filter_rule_list(self, text: str):
         """Filters the visible rule widgets based on input text."""
-        self._filter_list(text, self.rule_widgets, lambda item_id: self.rules.get(item_id))
-        # --- Add this line ---
-        self._update_rule_count_label() # Update count after filtering
-        # ---
+        try:
+            filter_lower = text.lower().strip() if text else ""
+            print(f"[Filter] Filtering rules with text: '{filter_lower}'")
+            
+            # Track if we're hiding/showing any items
+            any_visible = False
+            visible_count = 0
+            total_count = 0
+            
+            # Process all items in the list widget
+            for i in range(self.rules_list_widget.count()):
+                item = self.rules_list_widget.item(i)
+                if not item:
+                    continue
+                    
+                total_count += 1
+                    
+                # Get the rule ID stored in the item's data
+                rule_id = item.data(Qt.ItemDataRole.UserRole)
+                if not rule_id or rule_id not in self.rules:
+                    item.setHidden(True)
+                    continue
+                
+                # Get rule data
+                rule_data = self.rules.get(rule_id)
+                if not rule_data:
+                    item.setHidden(True)
+                    continue
+                
+                # Build search string from rule data
+                search_string = ""
+                
+                # Add domain (most important for searching)
+                domain = rule_data.get('domain', '')
+                if domain:
+                    search_string += domain.lower() + " "
+                    
+                # Add proxy name if applicable
+                proxy_id = rule_data.get('proxy_id')
+                if proxy_id and proxy_id in self.proxies:
+                    search_string += self.proxies[proxy_id].get('name', '').lower() + " "
+                    
+                # Add profile name if applicable
+                profile_id = rule_data.get('profile_id')
+                if profile_id and profile_id in self.profiles:
+                    search_string += self.profiles[profile_id].get('name', '').lower() + " "
+                
+                # Check if the filter text is in the search string
+                # If no filter text, show everything
+                is_visible = not filter_lower or filter_lower in search_string
+                item.setHidden(not is_visible)
+                
+                # Track if we have any visible items
+                if is_visible:
+                    any_visible = True
+                    visible_count += 1
+            
+            # Update the count label only after all items have been processed
+            self._update_rule_count_label()
+            
+            # Update visibility of placeholder based on whether we have any visible items
+            if self.rules_list_widget.count() > 0:
+                show_placeholder = not any_visible
+                self.rules_placeholder_widget.setVisible(show_placeholder)
+                self.rules_list_widget.setVisible(not show_placeholder)
+            
+            # Debug information
+            print(f"[UI] Rule visibility updated - visible: {visible_count}, total: {total_count}, showing placeholder: {not any_visible}")
+            print(f"[Filter] Filter completed, any_visible: {any_visible}")
+            
+        except Exception as e:
+            print(f"[Error] Rule filtering failed: {e}")
+            # In case of filtering error, make all items visible
+            for i in range(self.rules_list_widget.count()):
+                item = self.rules_list_widget.item(i)
+                if item:
+                    item.setHidden(False)
+            self._update_rule_count_label()
+            # Always ensure list is visible in case of error
+            self.rules_list_widget.setVisible(True)
+            self.rules_placeholder_widget.setVisible(False)
 
     def _filter_proxy_list(self, text: str):
         """Filters the visible proxy widgets based on input text."""
-        self._filter_list(text, self.proxy_widgets, lambda item_id: self.proxies.get(item_id))
-        # --- Add this line ---
-        self._update_proxy_count_label() # Update count after filtering (Good to have here too)
-        # ---
+        filter_lower = text.lower()
+        
+        # Process all proxy widgets
+        for proxy_id, widget in self.proxy_widgets.items():
+            if proxy_id not in self.proxies:
+                widget.setVisible(False)
+                continue
+                
+            # Get proxy data
+            proxy_data = self.proxies.get(proxy_id)
+            if not proxy_data:
+                widget.setVisible(False)
+                continue
+                
+            # Build search string from proxy data
+            search_string = ""
+            
+            # Add name, address, and other relevant fields
+            for key, value in proxy_data.items():
+                if key not in ['id', 'password', 'status', 'requires_auth'] and value:
+                    search_string += str(value).lower() + " "
+            
+            # Check if the filter text is in the search string
+            # If no filter text, show everything
+            is_visible = not filter_lower or filter_lower in search_string
+            widget.setVisible(is_visible)
+        
+        # Update the count label
+        self._update_proxy_count_label()
 
     def _populate_proxy_list(self):
         """Clear and repopulate the proxy list UI."""
@@ -2152,30 +2960,12 @@ class MainWindow(QMainWindow):
 
     def _update_proxy_count_label(self):
         """Updates the label showing the number of proxies matching the current filter."""
+        # Count visible proxies by checking widget visibility
         visible_count = 0
-        filter_text = ""
-        if hasattr(self, 'proxy_filter_bar'):
-            filter_input_widget = self.proxy_filter_bar.findChild(QLineEdit)
-            if filter_input_widget: filter_text = filter_input_widget.text().lower()
-
-        # Iterate through the actual proxies data
-        for proxy_id, proxy_data in self.proxies.items():
-            # 1. Check if proxy matches the filter text
-            text_match = True # Assume match if filter is empty
-            if filter_text:
-                search_string = ""
-                # Build search string from proxy data
-                for key, value in proxy_data.items():
-                    if key not in ['id', 'password', 'status', 'requires_auth'] and value:
-                         search_string += str(value).lower() + " "
-                # Add username if auth is required? Might be sensitive. Let's skip for now.
-
-                text_match = filter_text in search_string
-
-            # 2. Increment count if text matches
-            if text_match:
+        for proxy_widget in self.proxy_widgets.values():
+            if proxy_widget.isVisible():
                 visible_count += 1
-
+                
         self.proxies_count_label.setText(f"({visible_count} Visible)")
 
     def closeEvent(self, event):
@@ -2184,11 +2974,12 @@ class MainWindow(QMainWindow):
         self._cancel_proxy_edit(animate=False)
         self._cancel_rule_edit(animate=False)
 
-        # ... (rest of closeEvent as before) ...
-
         # If fully exiting (not hiding to tray):
         if self.close_behavior == "exit" or self._force_quit:
              print("[App] Exiting application...")
+             # Stop the hotkey listener first
+             print("[App Exit] Stopping hotkey listener...")
+             self.hotkey_manager.stop_listener()
              # Stop the engine
              self.proxy_engine.stop()
              # --- Add Windows Proxy Disable on Exit ---
@@ -2196,9 +2987,15 @@ class MainWindow(QMainWindow):
                   print("[App Exit] Disabling system proxy before exiting...")
                   self._set_windows_proxy(enable=False)
              # --- End Add ---
-             # ... (rest of exit logic) ...
+             # Save settings one last time
+             self.save_settings()
+             print("[App Exit] Settings saved. Accepting close event.")
              event.accept()
-        # ... (else hide to tray) ...
+        else:
+            # Hide to tray behavior
+            print("[App] Hiding window to system tray.")
+            event.ignore() # Prevent closing
+            self.hide() # Hide the main window
 
     # ... (rest of MainWindow methods) ... 
 
@@ -2259,98 +3056,554 @@ class MainWindow(QMainWindow):
     # ... (rest of MainWindow methods like _handle_toggle_proxy, closeEvent, etc.) ... 
 
     def _open_settings_folder(self):
-        """Opens the folder containing the settings.ini file in the system's file explorer."""
-        settings_dir = os.path.dirname(self.settings_file)
-        if not os.path.exists(settings_dir):
-            QMessageBox.warning(self, "Error", f"Settings directory not found:\n{settings_dir}")
-            return
-
-        print(f"Opening settings folder: {settings_dir}")
-        try:
-            if platform.system() == "Windows":
-                os.startfile(settings_dir)
-            elif platform.system() == "Darwin": # macOS
-                subprocess.run(['open', settings_dir], check=True)
-            else: # Linux and other Unix-like
-                subprocess.run(['xdg-open', settings_dir], check=True)
-        except FileNotFoundError:
-             QMessageBox.warning(self, "Error", f"Could not open folder.\n'{'xdg-open' if platform.system() != 'Darwin' else 'open'}' command not found.")
-        except Exception as e:
-             QMessageBox.warning(self, "Error", f"Could not open folder:\n{e}")
-             print(f"Error opening folder {settings_dir}: {e}")
+        """Opens the folder containing the settings.ini file."""
+        config_dir = os.path.dirname(self.settings_file)
+        print(f"Opening settings folder: {config_dir}")
+        if os.path.exists(config_dir):
+            try:
+                if platform.system() == "Windows":
+                    os.startfile(config_dir) # Use os.startfile on Windows
+                elif platform.system() == "Darwin": # macOS
+                    subprocess.Popen(["open", config_dir])
+                else: # Linux and other Unix-like
+                    subprocess.Popen(["xdg-open", config_dir])
+            except Exception as e:
+                print(f"Error opening settings folder: {e}")
+                QMessageBox.warning(self, "Error", f"Could not open settings folder automatically.\nPath: {config_dir}\nError: {e}")
+        else:
+            QMessageBox.warning(self, "Error", f"Settings folder does not exist:\n{config_dir}")
 
     # --- Add Reset Method ---
     def _reset_all_settings(self):
-        """Resets all application data and settings to defaults."""
-        reply = QMessageBox.question(self, "Reset Settings",
-                                     "Are you sure you want to reset ALL settings?\n"
-                                     "This will delete all your proxies, rules, and profiles, and restore default UI settings.\n"
-                                     "This action cannot be undone.",
-                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                                     QMessageBox.StandardButton.No)
+        """Resets all settings to default values."""
+        reply = QMessageBox.warning(
+            self, "Confirm Reset",
+            "Are you sure you want to reset ALL settings?\n"
+            "This will clear all profiles, proxies, rules, hotkeys, and UI preferences.\n"
+            "The application will close after reset.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel)
 
         if reply == QMessageBox.StandardButton.Yes:
             print("[Settings] Resetting all settings...")
 
-            # 1. Reset Internal Data Structures
+            # Stop engine and listeners
+            if self.proxy_engine.is_active: self.proxy_engine.stop()
+            self.hotkey_manager.stop_listener()
+
+            # Clear data stores
+            self.profiles.clear()
             self.proxies.clear()
             self.rules.clear()
-            self.profiles.clear()
-            self.profiles = {"__default__": {"name": "Default"}} # Reset to only default profile
-            self.active_profile_id = "__default__"
-            self.engine_active_profile_id = "__default__" # Also reset engine's target
+            self._current_active_profile_id = None
 
-            # 2. Clear Widgets
-            # Proxy List
+            # Clear UI widgets
+            # ---> Correctly clear rule list and widgets <---
+            self.rules_list_widget.clear() # Clear the list widget items
+            # Delete the actual widget instances we stored
+            for rule_id, widget in self.rule_widgets.items():
+                 widget.deleteLater()
+            self.rule_widgets.clear() # Clear the dictionary holding the widgets
+            # ---> Correctly clear proxy list and widgets <---
+            # Clear widgets from the layout first
             while self.proxy_list_layout.count():
-                item = self.proxy_list_layout.takeAt(0)
-                widget = item.widget()
-                if widget: widget.deleteLater()
+                 item = self.proxy_list_layout.takeAt(0)
+                 widget = item.widget()
+                 if widget:
+                      widget.deleteLater()
+            # Clear the dictionary holding the proxy widgets
             self.proxy_widgets.clear()
-            # Rule List
-            while self.rule_list_layout.count():
-                item = self.rule_list_layout.takeAt(0)
-                widget = item.widget()
-                if widget: widget.deleteLater()
-            self.rule_widgets.clear()
+            # Update counts
+            self._update_proxy_count_label()
+            self._update_rule_count_label()
+            # ---> End list clearing correction <---
 
-            # 3. Clear Settings File
+            # Clear settings file
             settings = QSettings(self.settings_file, QSettings.Format.IniFormat)
             settings.clear()
             settings.sync() # Ensure cleared state is written
-            print("[Settings] Cleared settings file.")
 
-            # 4. Reset UI Elements to Defaults
-            # Theme
-            self.current_theme = 'dark' # Default theme
-            self.apply_theme(self.current_theme) # Apply stylesheet
-            self.theme_combo.blockSignals(True)
-            self.theme_combo.setCurrentIndex(0) # Set combo to Dark
-            self.theme_combo.blockSignals(False)
-            # Close Behavior
-            self.close_behavior = "minimize" # Default
-            self.close_to_tray_checkbox.setChecked(True)
-            # Startup
-            self.start_engine_checkbox.setChecked(False) # Default off
-            # Hotkeys
+            # Reset UI elements to default states
+            self.theme_combo.setCurrentIndex(0) # Default to Dark
+            self.apply_theme('dark')
+            self.close_to_tray_checkbox.setChecked(True) # Default to minimize
+            self.start_engine_checkbox.setChecked(False) # Default to off
+            if IS_WINDOWS:
+                self.enable_system_proxy_checkbox.setChecked(False)
             self.toggle_hotkey_edit.clear()
             self.show_hide_hotkey_edit.clear()
             self.next_profile_hotkey_edit.clear()
             self.prev_profile_hotkey_edit.clear()
+            self.quick_add_rule_hotkey_edit.clear()
 
-            # 5. Re-populate selectors/counts
-            self._update_profile_selectors() # Populate with only Default profile
-            self._update_proxy_count_label()
-            self._update_rule_count_label()
-            # No need to call populate lists as they are now empty
-
-            # 6. Save the default settings back
-            self.save_settings() # This will save the current (default) state
-
-            # 7. Update Engine Config (with empty rules/proxies)
-            self.proxy_engine.update_config(self.get_active_rules(), self.proxies, self.engine_active_profile_id)
-
-            self.show_status_message("All settings have been reset.", 5000)
-            QMessageBox.information(self, "Reset Complete", "All settings have been reset to default values.")
-
+            # Re-run initial setup steps? Or just quit? Quit is safer.
+            QMessageBox.information(self, "Reset Complete", "Settings have been reset. The application will now close.")
+            self._force_quit = True # Set flag to ensure quit
+            self.close() # Close the window, which will trigger quit
     # --- End Reset Method ---
+
+    # --- Quick Add Rule Implementation ---
+
+    def _trigger_quick_add_rule(self):
+        """
+        Handles the hotkey/action to open the Quick Add Rule dialog.
+        Attempts copy simulation *before* reading clipboard.
+        """
+        print("[Quick Add] Triggered in MainWindow.")
+
+        # --- Simulate Copy FIRST ---
+        copy_success = False
+        if self.hotkey_manager and self.hotkey_manager._listener_worker:
+            print("[Quick Add] Attempting copy simulation via HotkeyManager worker...")
+            try:
+                # Access the simulation method on the worker instance
+                copy_success = self.hotkey_manager._listener_worker._simulate_copy_combined()
+                print(f"[Quick Add] Copy simulation result: {copy_success}")
+            except Exception as e:
+                print(f"[Quick Add] Error calling copy simulation: {e}")
+        else:
+            print("[Quick Add] HotkeyManager or worker not available for copy simulation.")
+
+        # --- Wait briefly for clipboard to potentially update ---
+        print("[Quick Add] Waiting briefly for clipboard...")
+        time.sleep(0.2) # Adjust delay if needed (0.1 to 0.3 is typical)
+
+        # --- Now, proceed to get rule from clipboard (which just reads) ---
+        print("[Quick Add] Calling QuickRuleAddDialog.get_rule_from_clipboard...")
+        QuickRuleAddDialog.get_rule_from_clipboard(self)
+
+    def _handle_quick_rule_save(self, domain: str, proxy_id: str | None, profile_id: str | None):
+        """Handles saving a rule from the QuickRuleAddDialog."""
+        # ---> Corrected Log Message <---
+        print(f"[Quick Save] Received: Domain='{domain}', Proxy='{proxy_id}', Profile='{profile_id}'") # Directly print proxy_id
+
+        if not profile_id:
+            QMessageBox.warning(self, "Save Error", "Cannot save rule: No profile selected or profile invalid.")
+            print("[Quick Save] Error: profile_id is missing.")
+            return
+        if not domain:
+             QMessageBox.warning(self, "Save Error", "Cannot save rule: Domain/IP cannot be empty.")
+             print("[Quick Save] Error: domain is missing.")
+             return
+
+        # Check if a rule with the same domain/IP already exists IN THIS PROFILE
+        existing_rule_id = self._find_rule_by_domain_and_profile(domain, profile_id)
+
+        # ---> Add Logging for Existing Check <---
+        print(f"[Quick Save] Check result for existing rule: ID='{existing_rule_id}'")
+
+        if existing_rule_id:
+            # ---> Add Logging for Update Path <---
+            print(f"[Quick Save] Updating existing rule '{existing_rule_id}'...")
+            # Update existing rule: only change the proxy_id
+            self.rules[existing_rule_id]['proxy_id'] = proxy_id
+            # Optionally update 'enabled' status if needed, but typically quick add shouldn't disable
+            # self.rules[existing_rule_id]['enabled'] = True
+            QTimer.singleShot(50, lambda: self.show_status_message(f"Rule updated for '{domain}'"))
+            rule_id_to_scroll = existing_rule_id
+        else:
+            # ---> Add Logging for Add Path <---
+            print(f"[Quick Save] No existing rule found. Adding new rule...")
+            # Add new rule
+            new_rule_id = str(uuid.uuid4())
+            self.rules[new_rule_id] = {
+                "id": new_rule_id,
+                "domain": domain, # Store the validated/cleaned domain
+                "proxy_id": proxy_id, # Can be None for Direct
+                "profile_id": profile_id, # Assign to the selected profile
+                "enabled": True # Default to enabled
+            }
+            print(f"[Quick Save] Added new rule '{new_rule_id}' for domain '{domain}' in profile '{profile_id}'.")
+            QTimer.singleShot(50, lambda: self.show_status_message(f"Rule added for '{domain}'"))
+            rule_id_to_scroll = new_rule_id
+
+        # Debounce populate/save/scroll
+        self._rebuild_rule_list_safely() # Handles populate, filter, counts
+        self.save_settings() # Save changes
+        # Scroll after list is rebuilt and potentially filtered
+        QTimer.singleShot(100, lambda: self._safely_scroll_to_rule(rule_id_to_scroll))
+
+    # --- End Quick Add Rule Implementation ---
+
+    # --- >> Ensure these helpers are indented correctly within the MainWindow class << ---
+    def _create_separator(self) -> QFrame:
+        """Creates a horizontal line separator."""
+        separator = QFrame()
+        separator.setFrameShape(QFrame.Shape.HLine)
+        separator.setFrameShadow(QFrame.Shadow.Sunken)
+        separator.setObjectName("SettingsSeparator") # For styling
+        return separator
+
+    def _create_clear_hotkey_button(self, target_edit: QKeySequenceEdit, hotkey_name: str) -> QToolButton:
+        """Creates a clear button for a hotkey."""
+        button = QToolButton()
+        button.setText("✕") # Use a clear symbol
+        button.setObjectName("ClearHotkeyButton")
+        button.setToolTip(f"Clear {hotkey_name} hotkey")
+        # Use lambda to ensure correct target_edit is passed
+        button.clicked.connect(lambda: self._clear_hotkey(target_edit))
+        return button
+
+    def _create_hotkey_row(self, key_edit: QKeySequenceEdit, clear_button: QToolButton) -> QWidget:
+         """Creates a widget containing the key edit and clear button."""
+         widget = QWidget()
+         layout = QHBoxLayout(widget)
+         layout.setContentsMargins(0,0,0,0)
+         layout.setSpacing(5)
+         layout.addWidget(key_edit, stretch=1)
+         layout.addWidget(clear_button)
+         return widget
+    # --- End Helper Methods ---
+
+    def _qkeysequence_to_pynput(self, q_sequence: QKeySequence) -> str | None:
+        """Converts a QKeySequence (first combo) to a pynput-compatible string."""
+        if q_sequence.isEmpty():
+            return None
+
+        # QKeySequence can represent multiple combinations (e.g., Ctrl+A, Ctrl+B)
+        # We only support the first one for global hotkeys for simplicity.
+        key_combination = q_sequence[0] # Get the first QKeyCombination
+
+        modifiers = key_combination.keyboardModifiers()
+        key = key_combination.key()
+
+        pynput_modifiers = []
+        # Order might matter for pynput. Let's try Ctrl, Alt, Shift, Meta.
+        if modifiers & Qt.KeyboardModifier.ControlModifier: pynput_modifiers.append("<ctrl>")
+        if modifiers & Qt.KeyboardModifier.AltModifier: pynput_modifiers.append("<alt>")
+        if modifiers & Qt.KeyboardModifier.ShiftModifier: pynput_modifiers.append("<shift>")
+        if modifiers & Qt.KeyboardModifier.MetaModifier: pynput_modifiers.append("<cmd>") # Use <cmd> for Meta/Win key
+
+        # --- Key Mapping ---
+        # This map needs to be comprehensive for common keys
+        qt_to_pynput_map = {
+            # Letters (lowercase)
+            Qt.Key.Key_A: 'a', Qt.Key.Key_B: 'b', Qt.Key.Key_C: 'c', Qt.Key.Key_D: 'd',
+            Qt.Key.Key_E: 'e', Qt.Key.Key_F: 'f', Qt.Key.Key_G: 'g', Qt.Key.Key_H: 'h',
+            Qt.Key.Key_I: 'i', Qt.Key.Key_J: 'j', Qt.Key.Key_K: 'k', Qt.Key.Key_L: 'l',
+            Qt.Key.Key_M: 'm', Qt.Key.Key_N: 'n', Qt.Key.Key_O: 'o', Qt.Key.Key_P: 'p',
+            Qt.Key.Key_Q: 'q', Qt.Key.Key_R: 'r', Qt.Key.Key_S: 's', Qt.Key.Key_T: 't',
+            Qt.Key.Key_U: 'u', Qt.Key.Key_V: 'v', Qt.Key.Key_W: 'w', Qt.Key.Key_X: 'x',
+            Qt.Key.Key_Y: 'y', Qt.Key.Key_Z: 'z',
+            # Numbers
+            Qt.Key.Key_0: '0', Qt.Key.Key_1: '1', Qt.Key.Key_2: '2', Qt.Key.Key_3: '3',
+            Qt.Key.Key_4: '4', Qt.Key.Key_5: '5', Qt.Key.Key_6: '6', Qt.Key.Key_7: '7',
+            Qt.Key.Key_8: '8', Qt.Key.Key_9: '9',
+            # Function Keys
+            Qt.Key.Key_F1: '<f1>', Qt.Key.Key_F2: '<f2>', Qt.Key.Key_F3: '<f3>', Qt.Key.Key_F4: '<f4>',
+            Qt.Key.Key_F5: '<f5>', Qt.Key.Key_F6: '<f6>', Qt.Key.Key_F7: '<f7>', Qt.Key.Key_F8: '<f8>',
+            Qt.Key.Key_F9: '<f9>', Qt.Key.Key_F10: '<f10>', Qt.Key.Key_F11: '<f11>', Qt.Key.Key_F12: '<f12>',
+            # Add F13-F24 if needed and supported by pynput - pynput uses vk codes for these usually
+            # Navigation & Editing
+            Qt.Key.Key_Space: '<space>',
+            Qt.Key.Key_Enter: '<enter>', Qt.Key.Key_Return: '<enter>', # Map both Qt variants
+            Qt.Key.Key_Tab: '<tab>', Qt.Key.Key_Backtab: '<shift>+<tab>', # Handle Shift+Tab
+            Qt.Key.Key_Backspace: '<backspace>',
+            Qt.Key.Key_Delete: '<delete>',
+            Qt.Key.Key_Insert: '<insert>',
+            Qt.Key.Key_Escape: '<esc>',
+            Qt.Key.Key_Home: '<home>',
+            Qt.Key.Key_End: '<end>',
+            Qt.Key.Key_PageUp: '<page_up>',
+            Qt.Key.Key_PageDown: '<page_down>',
+            Qt.Key.Key_Up: '<up>',
+            Qt.Key.Key_Down: '<down>',
+            Qt.Key.Key_Left: '<left>',
+            Qt.Key.Key_Right: '<right>',
+            # Punctuation & Symbols (use literal character)
+            Qt.Key.Key_Comma: ',', Qt.Key.Key_Period: '.', Qt.Key.Key_Slash: '/',
+            Qt.Key.Key_Semicolon: ';', Qt.Key.Key_Colon: ':', # Qt usually gives base key, shift handled by modifier
+            Qt.Key.Key_Apostrophe: "'", Qt.Key.Key_QuoteDbl: '"',
+            Qt.Key.Key_BracketLeft: '[', Qt.Key.Key_BracketRight: ']',
+            Qt.Key.Key_BraceLeft: '{', Qt.Key.Key_BraceRight: '}',
+            Qt.Key.Key_Backslash: '\\', Qt.Key.Key_Minus: '-', Qt.Key.Key_Equal: '=',
+            Qt.Key.Key_Plus: '+', Qt.Key.Key_Underscore: '_',
+            Qt.Key.Key_AsciiTilde: '~', Qt.Key.Key_QuoteLeft: '`', # Backtick
+            # Add more mappings as needed...
+        }
+        # Special case for Shift+Tab from Qt.Key_Backtab
+        pynput_key = None
+        if key == Qt.Key.Key_Backtab:
+            if "<shift>" not in pynput_modifiers:
+                pynput_modifiers.append("<shift>")
+            pynput_key = "<tab>"
+        else:
+            pynput_key = qt_to_pynput_map.get(key)
+
+        if pynput_key is None:
+            print(f"[Hotkey Conversion] Warning: Unmapped Qt key code: {key}. Hotkey might not work.")
+            return None
+
+        # Combine modifiers and key
+        # Ensure key is added last
+        full_combo = "+".join(pynput_modifiers + [pynput_key])
+        print(f"[Hotkey Conversion] Converted '{q_sequence.toString()}' to '{full_combo}'")
+        return full_combo
+    # --- End Converter ---
+
+    def _load_and_register_hotkeys(self):
+        """Loads hotkeys from settings, translates, and registers them."""
+        settings = QSettings(self.settings_file, QSettings.Format.IniFormat)
+        hotkey_map = {} # {pynput_string: manager_signal_name}
+
+        # Load sequence strings from settings
+        toggle_seq_str = settings.value("hotkeys/toggle_proxy", "", type=str)
+        show_hide_seq_str = settings.value("hotkeys/show_hide_window", "", type=str)
+        next_prof_seq_str = settings.value("hotkeys/next_profile", "", type=str)
+        prev_prof_seq_str = settings.value("hotkeys/prev_profile", "", type=str)
+        quick_add_seq_str = settings.value("hotkeys/quick_add_rule", "", type=str)
+
+        # Convert and map to signal names
+        seq_map = {
+            toggle_seq_str: 'toggle_engine_triggered',
+            show_hide_seq_str: 'show_hide_triggered',
+            next_prof_seq_str: 'next_profile_triggered',
+            prev_prof_seq_str: 'prev_profile_triggered',
+            quick_add_seq_str: 'quick_add_rule_triggered',
+        }
+
+        for seq_str, signal_name in seq_map.items():
+            if seq_str: # Only process if a sequence string exists
+                q_seq = QKeySequence.fromString(seq_str, QKeySequence.SequenceFormat.NativeText)
+                pynput_str = self._qkeysequence_to_pynput(q_seq)
+                if pynput_str:
+                    # Simple conflict check within this load cycle
+                    if pynput_str in hotkey_map:
+                         conflicting_signal = hotkey_map[pynput_str]
+                         print(f"[Hotkey Load] Conflict detected: '{pynput_str}' used by '{signal_name}' and '{conflicting_signal}'. Skipping '{signal_name}'.")
+                         QMessageBox.warning(self, "Hotkey Conflict", f"Hotkey '{seq_str}' conflicts with another hotkey.\n'{signal_name.replace('_triggered','').replace('_',' ').title()}' hotkey will not be registered.")
+                    else:
+                         hotkey_map[pynput_str] = signal_name
+
+        # Register the valid, non-conflicting hotkeys
+        self.hotkey_manager.update_hotkeys(hotkey_map)
+
+    def _handle_toggle_hotkey_action(self):
+        """Handles the signal from HotkeyManager for toggling the engine."""
+        print("[Hotkey Action] Toggle engine triggered.")
+        # Simulate a click on the main toggle button
+        # This ensures the state change logic (_handle_toggle_proxy) is executed correctly
+        current_state = self.toggle_proxy_button.isChecked()
+        self.toggle_proxy_button.setChecked(not current_state) # This will trigger the connected _handle_toggle_proxy slot
+
+    def _handle_hotkey_error(self, error_message: str):
+        """Displays errors reported by the HotkeyManager."""
+        print(f"[Hotkey Error] Received from manager: {error_message}")
+        self.show_status_message(f"Hotkey Error: {error_message}", 8000)
+        # Optionally show a persistent warning if critical (e.g., listener failed to start)
+        if "Error starting" in error_message:
+             QMessageBox.warning(self, "Hotkey Listener Error",
+                                f"Failed to start the global hotkey listener:\n{error_message}\n\n"
+                                "Global hotkeys will not function.")
+
+    # ... _switch_to_next_profile, _switch_to_prev_profile ...
+    # ... Profile Management Methods ...
+    # ... _update_profile_selectors, _update_profile_button_states, _handle_active_profile_change ...
+    # ... _add_profile, _rename_profile, _delete_profile ...
+    # ... Animation Helper ...
+    # ... Hotkey Helper Methods (_clear_hotkey) ...
+    # ... Filter Widgets, Filtering Methods ...
+    # ... Proxy List Methods (_populate_proxy_list, _update_proxy_count_label) ...
+
+    def _find_rule_by_domain_and_profile(self, domain: str, profile_id: str) -> str | None:
+        """Finds the FIRST rule matching the domain and profile ID."""
+        domain_lower = domain.lower()
+        # ---> Add Logging for Input <---
+        print(f"[Find Rule Debug] Searching for: domain='{domain_lower}', profile_id='{profile_id}'")
+        for rule_id, rule_data in self.rules.items():
+            # Match domain case-insensitively and check profile_id
+            # ---> Add Logging for Comparison <---
+            rule_domain_lower = rule_data.get('domain', '').lower()
+            rule_profile_id = rule_data.get('profile_id')
+            print(f"[Find Rule Debug] Comparing with rule '{rule_id}': domain='{rule_domain_lower}', profile='{rule_profile_id}'")
+            if rule_domain_lower == domain_lower and rule_profile_id == profile_id:
+                print(f"[Find Rule] Found existing rule '{rule_id}' for domain '{domain}' in profile '{profile_id}'.")
+                return rule_id
+        print(f"[Find Rule] No existing rule found for domain '{domain}' in profile '{profile_id}'.")
+        return None
+
+    def _update_rules_title_label(self):
+        """Updates the rules title label to show which profile is active."""
+        if hasattr(self, 'rules_title_label'):
+            active_profile_name = "None"
+            if self._current_active_profile_id and self._current_active_profile_id in self.profiles:
+                active_profile_name = self.profiles[self._current_active_profile_id].get('name', 'Unknown')
+            # Use the all rules title format
+            self.rules_title_label.setText(f"All Domain Rules (Active Profile: {active_profile_name})")
+
+    # ---> ADD _create_tool_button METHOD HERE <---
+    def _create_tool_button(self, icon_path: str, tooltip: str, connection_slot) -> QToolButton:
+        """Helper to create a QToolButton with an SVG icon."""
+        button = QToolButton()
+        button.setObjectName("ToolButton") # General class for styling
+        # Load icon (color will be set by theme application)
+        # Use a placeholder color initially, _apply_theme_colors will fix it
+        # svg_data = load_and_colorize_svg_content(icon_path, "#ffffff") # Placeholder color
+        # if svg_data:
+        #     button.setIcon(create_icon_from_svg_data(svg_data))
+        # For now, just set icon path, theme application will handle loading/coloring
+        button.setProperty("iconPath", icon_path) # Store path for theme update
+        button.setIconSize(QSize(18, 18)) # Adjust size as needed
+        button.setToolTip(tooltip)
+        if connection_slot:
+            button.clicked.connect(connection_slot)
+        return button
+    # ---> END METHOD ADDITION <---
+
+    # ---> ADD the missing handler method <---
+    def _handle_system_proxy_toggle(self, state: int):
+        """
+        Handles the change in the 'Set as system proxy' checkbox state (Windows only).
+        Applies the change immediately only if the engine is currently active.
+        Saves the setting regardless.
+        """
+        if not IS_WINDOWS:
+             return # Should not be reachable if checkbox isn't created
+
+        checked = (state == Qt.CheckState.Checked.value) # Convert state to boolean
+        print(f"[System Proxy] Checkbox toggled: {'Checked' if checked else 'Unchecked'}")
+
+        # Apply the change only if the engine is currently active
+        if self.proxy_engine.is_active:
+            print(f"[System Proxy] Engine is active, applying setting: enable={checked}")
+            self._set_windows_proxy(enable=checked, proxy_port=self.proxy_engine.listening_port)
+        else:
+             # If engine is not active, ensuring the proxy is disabled when unchecking might be desirable
+             # especially if the app crashed previously leaving it enabled.
+             if not checked:
+                  print("[System Proxy] Engine not active, ensuring system proxy is disabled on uncheck.")
+                  self._set_windows_proxy(enable=False)
+             else:
+                  print("[System Proxy] Engine not active, setting will apply on next engine start.")
+
+        # Save the preference immediately
+        self.save_settings()
+    # ---> END of added method <---
+
+    def _create_vertical_separator(self) -> QFrame:
+        """Creates a vertical separator line for the UI."""
+        separator = QFrame()
+        separator.setFrameShape(QFrame.Shape.VLine)
+        separator.setFrameShadow(QFrame.Shadow.Sunken)
+        separator.setObjectName("StatusBarSeparator")
+        separator.setFixedWidth(1)
+        return separator
+
+    def _create_profile_action_handler(self, profile_id):
+        return lambda: self._handle_tray_profile_selection(profile_id)
+
+    def _rebuild_rule_list_safely(self):
+        """Safely rebuilds the rule list with full error handling."""
+        try:
+            print("[Rules] Safely rebuilding rule list...")
+            
+            # First, block signals to prevent unwanted UI updates during rebuild
+            self.rules_list_widget.blockSignals(True)
+            
+            # Safely clear the list widget
+            self.rules_list_widget.clear()
+            
+            # Clean up old widgets first, before creating new ones
+            try:
+                # Schedule old widgets for deletion
+                for rule_id, widget in list(self.rule_widgets.items()):
+                    if widget:
+                        try:
+                            if widget.parent():
+                                widget.setParent(None)
+                            widget.deleteLater()
+                        except RuntimeError:
+                            # Widget might already be deleted
+                            print(f"[Warning] Widget for rule {rule_id} already deleted")
+                # Clear the dictionary
+                self.rule_widgets.clear()
+            except Exception as e:
+                print(f"[Error] Error cleaning up old widgets: {e}")
+            
+            # Process deletion events before continuing
+            QApplication.processEvents()
+            
+            # Don't filter rules by active profile ID - show all rules
+            all_rules = list(self.rules.values())
+            
+            # Sort rules (e.g., by domain)
+            all_rules.sort(key=lambda r: r.get('domain', '').lower())
+            
+            proxy_map = self._get_proxy_name_map()
+            profile_map = self._get_profile_name_map() # Contains all profile names
+            
+            print(f"[Rebuild] Adding {len(all_rules)} rules to list. Rules exist: {len(all_rules) > 0}")
+            
+            # Add items to the list
+            for rule_data in all_rules:
+                try:
+                    rule_id = rule_data.get('id')
+                    if not rule_id:
+                        continue
+                    
+                    # Create a new widget
+                    widget = RuleItemWidget(rule_data, proxy_map, profile_map, theme_name=self.current_theme)
+                    widget.edit_rule.connect(self._show_edit_rule_editor)
+                    widget.delete_rule.connect(self._delete_rule_entry)
+                    widget.toggle_enabled.connect(self._toggle_rule_enabled)
+                    self.rule_widgets[rule_id] = widget
+                    
+                    # Create list item and add widget to it
+                    item = QListWidgetItem()
+                    item.setData(Qt.ItemDataRole.UserRole, rule_id)
+                    item.setSizeHint(widget.sizeHint())
+                    self.rules_list_widget.addItem(item)
+                    self.rules_list_widget.setItemWidget(item, widget)
+                except Exception as e:
+                    print(f"[Error] Failed to create/add rule widget for {rule_id}: {e}")
+            
+            # Update count label and ensure visibility
+            any_rules = len(all_rules) > 0
+            self.rules_list_widget.setVisible(any_rules)
+            self.rules_placeholder_widget.setVisible(not any_rules)
+            
+            self.rules_count_label.setText(f"{len(all_rules)} rule{'s' if len(all_rules) != 1 else ''}")
+            
+            # Unblock signals after update
+            self.rules_list_widget.blockSignals(False)
+            
+            # Adjust layout if needed
+            self.rules_list_widget.update()
+            QApplication.processEvents()
+            
+            print("[Rules] List rebuild complete.")
+        except Exception as e:
+            print(f"[Error] Failed to rebuild rule list: {e}")
+            # Make sure list is visible in case of error
+            self.rules_list_widget.setVisible(True)
+            self.rules_placeholder_widget.setVisible(False)
+            
+            # Unblock signals in case of error
+            self.rules_list_widget.blockSignals(False)
+
+    def _scroll_to_item(self, list_widget, item_id):
+        """Scrolls to make the item with the given ID visible in the list widget."""
+        try:
+            # Find the item with the given ID
+            target_item = None
+            target_index = -1
+            
+            for i in range(list_widget.count()):
+                item = list_widget.item(i)
+                if item and item.data(Qt.ItemDataRole.UserRole) == item_id:
+                    target_item = item
+                    target_index = i
+                    break
+                    
+            if target_item:
+                # Scroll to make the item visible
+                list_widget.scrollToItem(target_item, QAbstractItemView.ScrollHint.PositionAtCenter)
+                
+                # Optionally highlight/select the item
+                list_widget.setCurrentItem(target_item)
+                print(f"[UI] Scrolled to item {item_id} at index {target_index}")
+            else:
+                print(f"[UI] Item {item_id} not found for scrolling")
+                
+        except Exception as e:
+            print(f"[Error] Failed to scroll to item: {e}")
