@@ -10,10 +10,51 @@ ctypes = None
 if IS_WINDOWS:
     try:
         import ctypes
-        print("[Hotkey Worker] Successfully imported ctypes.")
+        # Define necessary structures and constants for SendInput
+        # Pulled from various sources, common definitions
+        PUL = ctypes.POINTER(ctypes.c_ulong)
+        class KeyBdInput(ctypes.Structure):
+            _fields_ = [("wVk", ctypes.c_ushort),
+                        ("wScan", ctypes.c_ushort),
+                        ("dwFlags", ctypes.c_ulong),
+                        ("time", ctypes.c_ulong),
+                        ("dwExtraInfo", PUL)]
+
+        class HardwareInput(ctypes.Structure):
+            _fields_ = [("uMsg", ctypes.c_ulong),
+                        ("wParamL", ctypes.c_short),
+                        ("wParamH", ctypes.c_ushort)]
+
+        class MouseInput(ctypes.Structure):
+            _fields_ = [("dx", ctypes.c_long),
+                        ("dy", ctypes.c_long),
+                        ("mouseData", ctypes.c_ulong),
+                        ("dwFlags", ctypes.c_ulong),
+                        ("time", ctypes.c_ulong),
+                        ("dwExtraInfo", PUL)]
+
+        class Input_I(ctypes.Union):
+            _fields_ = [("ki", KeyBdInput),
+                        ("mi", MouseInput),
+                        ("hi", HardwareInput)]
+
+        class Input(ctypes.Structure):
+            _fields_ = [("type", ctypes.c_ulong),
+                        ("ii", Input_I)]
+
+        # Constants for SendInput
+        INPUT_KEYBOARD = 1
+        KEYEVENTF_KEYUP = 0x0002
+        VK_CONTROL = 0x11  # Ctrl key
+        VK_C = 0x43       # C key (virtual key code for 'C' key on standard layouts)
+
+        print("[Hotkey Worker] Successfully imported ctypes and defined SendInput structures.")
     except ImportError:
         print("[Hotkey Worker] Warning: ctypes failed to import. Copy simulation on Windows unavailable.")
         IS_WINDOWS = False # Treat as non-windows if import fails
+    except Exception as e:
+        print(f"[Hotkey Worker] Error defining ctypes structures for SendInput: {e}")
+        IS_WINDOWS = False # Assume failure if structures can't be defined
 # --- End Conditional Import ---
 
 class HotkeyListenerWorker(QObject):
@@ -39,37 +80,52 @@ class HotkeyListenerWorker(QObject):
             print(f"[Hotkey Worker] Error initializing pynput keyboard controller: {e}")
             self.kb_controller = None
 
-    # --- Windows Specific Copy Simulation (using user's ctypes logic) ---
+    # --- Windows Specific Copy Simulation (using SendInput) ---
     def _simulate_copy_windows(self):
-        """Simulates Ctrl+C using ctypes keybd_event with timing that works in other apps."""
-        if not ctypes:
-            print("[Hotkey Worker] ctypes simulation unavailable.")
+        """Simulates Ctrl+C using ctypes SendInput with timing that works in other apps."""
+        if not ctypes or not IS_WINDOWS: # Double-check IS_WINDOWS in case structure definition failed
+            print("[Hotkey Worker] ctypes/SendInput simulation unavailable.")
             return False
 
-        print("[Hotkey Worker] Simulating Copy command using ctypes (Ctrl+C) with revised timing...")
+        print("[Hotkey Worker] Simulating Copy command using SendInput (Ctrl+C) with revised timing...")
         success = False
         try:
-            # Windows API constants (redefined here for clarity)
-            VK_CONTROL = 0x11  # Ctrl key
-            VK_C = 0x43       # C key
-            KEYEVENTF_KEYUP = 0x0002  # Key release flag
+            # Create Input event structures
+            ctrl_down = Input(type=INPUT_KEYBOARD, ii=Input_I(ki=KeyBdInput(wVk=VK_CONTROL, dwFlags=0)))
+            c_down = Input(type=INPUT_KEYBOARD, ii=Input_I(ki=KeyBdInput(wVk=VK_C, dwFlags=0)))
+            c_up = Input(type=INPUT_KEYBOARD, ii=Input_I(ki=KeyBdInput(wVk=VK_C, dwFlags=KEYEVENTF_KEYUP)))
+            ctrl_up = Input(type=INPUT_KEYBOARD, ii=Input_I(ki=KeyBdInput(wVk=VK_CONTROL, dwFlags=KEYEVENTF_KEYUP)))
 
-            # Simulate Ctrl+C - using exact timing from working implementation
-            ctypes.windll.user32.keybd_event(VK_CONTROL, 0, 0, 0)  # Ctrl down
-            ctypes.windll.user32.keybd_event(VK_C, 0, 0, 0)       # C down
+            # Prepare the array of events
+            inputs = (Input * 4)(ctrl_down, c_down, c_up, ctrl_up) # Create array
+
+            # Send Ctrl Down + C Down
+            print("[Hotkey Worker] Sending Ctrl Down, C Down...")
+            ctypes.windll.user32.SendInput(2, ctypes.pointer(inputs[0]), ctypes.sizeof(Input))
+
+            # Wait
             time.sleep(0.05)  # Use 0.05s delay that works in other app
-            ctypes.windll.user32.keybd_event(VK_C, 0, KEYEVENTF_KEYUP, 0)       # C up
-            ctypes.windll.user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0) # Ctrl up
 
-            print("[Hotkey Worker] ctypes Copy simulation sequence sent.")
+            # Send C Up + Ctrl Up
+            print("[Hotkey Worker] Sending C Up, Ctrl Up...")
+            ctypes.windll.user32.SendInput(2, ctypes.pointer(inputs[2]), ctypes.sizeof(Input))
+
+            print("[Hotkey Worker] SendInput Copy simulation sequence sent.")
             success = True
         except Exception as e:
-            print(f"[Hotkey Worker] Error during ctypes copy simulation: {e}")
-            self.error_occurred.emit(f"ctypes Copy simulation failed: {e}")
+            print(f"[Hotkey Worker] Error during SendInput copy simulation: {e}")
+            self.error_occurred.emit(f"SendInput Copy simulation failed: {e}")
             success = False
+            # Attempt cleanup in case of error during sequence
+            try:
+                 print("[Hotkey Worker] Attempting SendInput cleanup...")
+                 inputs_cleanup = (Input * 2)(c_up, ctrl_up)
+                 ctypes.windll.user32.SendInput(2, ctypes.pointer(inputs_cleanup[0]), ctypes.sizeof(Input))
+            except Exception as cleanup_e:
+                 print(f"[Hotkey Worker] Error during SendInput cleanup attempt: {cleanup_e}")
         finally:
             # Use shorter delay that works in other app
-            print("[Hotkey Worker] Waiting for clipboard update (after ctypes)...")
+            print("[Hotkey Worker] Waiting for clipboard update (after SendInput)...")
             time.sleep(0.1)  # Use 0.1s delay from working implementation
             print("[Hotkey Worker] Clipboard wait finished.")
             return success
@@ -116,13 +172,13 @@ class HotkeyListenerWorker(QObject):
         # Try Windows method if available
         windows_success = False
         if IS_WINDOWS and ctypes:
-            print("[Hotkey Worker] Running Windows ctypes method...")
+            print("[Hotkey Worker] Running Windows SendInput method...")
             windows_success = self._simulate_copy_windows()
             if windows_success:
                 overall_success = True
-                print("[Hotkey Worker] Windows ctypes method succeeded")
+                print("[Hotkey Worker] Windows SendInput method succeeded")
             else:
-                print("[Hotkey Worker] Windows ctypes method failed")
+                print("[Hotkey Worker] Windows SendInput method failed")
         
         # Always try pynput method regardless of Windows method result
         pynput_success = False
