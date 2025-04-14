@@ -1,6 +1,6 @@
 # ProxieWy - Rule-Based Proxy Management
 
-[![Python Version](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Python Version](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
 [![Qt Version](https://img.shields.io/badge/Qt%20for%20Python-PySide6-green.svg)](https://www.qt.io/qt-for-python)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
