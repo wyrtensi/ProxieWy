@@ -213,7 +213,7 @@ class MainWindow(QMainWindow):
         # Set application details for QSettings
         QApplication.setOrganizationName("wyrtensi") # Example name
         QApplication.setApplicationName("ProxieWy")
-        QApplication.setApplicationVersion("1.1.1") # Example version
+        QApplication.setApplicationVersion("1.1.3") # Example version
 
         self.resize(self.NEW_DEFAULT_WIDTH, self.DEFAULT_HEIGHT)
 
@@ -299,6 +299,12 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(100, lambda: self._handle_toggle_proxy(True))
             # Note: The system proxy setting will be handled in _handle_toggle_proxy
             # when engine is started, based on the enable_system_proxy_checkbox state
+
+        self._log_auto_clear_timer = QTimer(self)
+        self._log_auto_clear_timer.setInterval(30_000)  # 30 seconds
+        self._log_auto_clear_timer.timeout.connect(self._auto_clear_logs_if_engine_running)
+
+        self.proxy_engine.status_changed.connect(self._handle_engine_status_for_log_timer)
 
     def _create_widgets(self):
         """Create all the widgets for the main window."""
@@ -420,9 +426,6 @@ class MainWindow(QMainWindow):
         proxies_top_bar = QHBoxLayout()
         proxies_top_bar.setContentsMargins(15, 10, 15, 10)
         proxies_top_bar.addWidget(QLabel("Managed Proxies   "))
-        self.proxies_count_label = QLabel("(0 Proxies)") # Label to show proxy count
-        self.proxies_count_label.setObjectName("ProxyCountLabel")
-        proxies_top_bar.addWidget(self.proxies_count_label)
         proxies_top_bar.addStretch()
         self.add_proxy_button = QPushButton("Add Proxy")
         if os.path.exists(ADD_ICON_PATH):
@@ -452,8 +455,9 @@ class MainWindow(QMainWindow):
         # ---> End Proxy Editor Container Setup <---
 
         # Filter Bar
-        self.proxy_filter_bar = self._create_filter_bar("Filter proxies...", self._filter_proxy_list)
+        self.proxy_filter_bar = self._create_filter_bar("Filter proxies...", self._filter_proxy_list, include_count_label=True)
         proxies_page_layout.addWidget(self.proxy_filter_bar)
+        proxies_page_layout.addSpacing(6)  # Add vertical space to match rules filter-to-list gap
 
         # Proxy List (Scroll Area)
         self.scroll_area = QScrollArea()
@@ -464,8 +468,8 @@ class MainWindow(QMainWindow):
         self.proxy_list_container = QWidget()
         self.proxy_list_container.setObjectName("ProxyListContainer")
         self.proxy_list_layout = QVBoxLayout(self.proxy_list_container)
-        self.proxy_list_layout.setContentsMargins(15, 0, 15, 15) # Margin at bottom
-        self.proxy_list_layout.setSpacing(5)
+        self.proxy_list_layout.setContentsMargins(15, 0, 15, 15) # Top margin 0 to match rules
+        self.proxy_list_layout.setSpacing(5) # Remove extra spacing between filter and first item
         self.proxy_list_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.scroll_area.setWidget(self.proxy_list_container)
         proxies_page_layout.addWidget(self.scroll_area)
@@ -678,10 +682,11 @@ class MainWindow(QMainWindow):
 
         # Version label in a container to center it
         version_container = QWidget()
+        version_container.setObjectName("VersionContainer")  # Add object name for CSS targeting
         version_layout = QHBoxLayout(version_container)
         version_layout.setContentsMargins(10, 0, 10, 0)
         version_label = QLabel(f"v{QApplication.applicationVersion()}")
-        version_label.setObjectName("VersionLabel")
+        version_label.setObjectName("CountLabel")
         version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         version_layout.addWidget(version_label, alignment=Qt.AlignmentFlag.AlignCenter)
         status_bar_layout.addWidget(version_container)
@@ -1150,18 +1155,35 @@ class MainWindow(QMainWindow):
         last_index = settings.value("ui/last_view_index", defaultValue=0, type=int)
         # We'll apply this in _set_initial_active_view after widgets are ready
 
-        # --- Load Profiles ---
+        # --- Load Profiles (support new and old format) ---
         settings.beginGroup("profiles")
-        profiles_json = settings.value("data_json", defaultValue="{}", type=str) # Load as JSON string
-        try:
-            self.profiles = json.loads(profiles_json)
-            if not isinstance(self.profiles, dict): # Basic type check after loading
-                print("[Settings] Warning: Loaded profiles data is not a dictionary. Resetting.")
-                self.profiles = {}
-        except json.JSONDecodeError:
-            print("[Settings] Warning: Failed to decode profiles JSON. Resetting profiles.")
-            self.profiles = {} # Reset if JSON is invalid
+        child_groups = settings.childGroups()
+        profiles = {}
+        if child_groups:
+            # New format: each profile is a group
+            for group in child_groups:
+                settings.beginGroup(group)
+                profile = {}
+                for k in settings.childKeys():
+                    profile[k] = settings.value(k, type=str)
+                # Convert id to string if present
+                if 'id' in profile:
+                    profile['id'] = str(profile['id'])
+                profiles[profile.get('id', group)] = profile
+                settings.endGroup()
+        else:
+            # Old format: JSON blob
+            profiles_json = settings.value("data_json", defaultValue="{}", type=str)
+            try:
+                profiles = json.loads(profiles_json)
+                if not isinstance(profiles, dict):
+                    print("[Settings] Warning: Loaded profiles data is not a dictionary. Resetting.")
+                    profiles = {}
+            except json.JSONDecodeError:
+                print("[Settings] Warning: Failed to decode profiles JSON. Resetting profiles.")
+                profiles = {}
         settings.endGroup()
+        self.profiles = profiles
 
         # ---> Ensure at least one profile exists <---
         if not self.profiles:
@@ -1173,67 +1195,101 @@ class MainWindow(QMainWindow):
 
         # Load Active Profile ID
         loaded_active_id = settings.value("ui/active_profile_id", defaultValue=None, type=str)
-        # ---> Validate Active Profile ID <---
         if loaded_active_id and loaded_active_id in self.profiles:
              self._current_active_profile_id = loaded_active_id
         else:
-             # If saved ID is invalid or missing, fall back to the first available profile ID
              self._current_active_profile_id = next(iter(self.profiles.keys()), None)
              print(f"[Settings] Invalid/missing active profile ID, defaulting to: {self._current_active_profile_id}")
 
-        # --- Load Proxies ---
+        # --- Load Proxies (support new and old format) ---
         settings.beginGroup("proxies")
-        proxies_json = settings.value("data_json", defaultValue="{}", type=str) # Load as JSON string
-        try:
-            self.proxies = json.loads(proxies_json)
-            if not isinstance(self.proxies, dict):
-                print("[Settings] Warning: Loaded proxies data is not a dictionary. Resetting.")
-                self.proxies = {}
-            # Add status field if missing from old saves
-            for proxy_id, proxy_data in self.proxies.items():
-                if isinstance(proxy_data, dict) and 'status' not in proxy_data:
-                     proxy_data['status'] = 'unknown' # Add default status
-        except json.JSONDecodeError:
-            print("[Settings] Warning: Failed to decode proxies JSON. Resetting proxies.")
-            self.proxies = {}
+        child_groups = settings.childGroups()
+        proxies = {}
+        if child_groups:
+            for group in child_groups:
+                settings.beginGroup(group)
+                proxy = {}
+                for k in settings.childKeys():
+                    proxy[k] = settings.value(k, type=str)
+                if 'id' in proxy:
+                    proxy['id'] = str(proxy['id'])
+                proxies[proxy.get('id', group)] = proxy
+                settings.endGroup()
+        else:
+            proxies_json = settings.value("data_json", defaultValue="{}", type=str)
+            try:
+                proxies = json.loads(proxies_json)
+                if not isinstance(proxies, dict):
+                    print("[Settings] Warning: Loaded proxies data is not a dictionary. Resetting.")
+                    proxies = {}
+                for proxy_id, proxy_data in proxies.items():
+                    if isinstance(proxy_data, dict) and 'status' not in proxy_data:
+                        proxy_data['status'] = 'unknown'
+            except json.JSONDecodeError:
+                print("[Settings] Warning: Failed to decode proxies JSON. Resetting proxies.")
+                proxies = {}
         settings.endGroup()
+        self.proxies = proxies
 
-        # --- Load Rules ---
+        # --- Load Rules (support new and old format) ---
         settings.beginGroup("rules")
-        rules_json = settings.value("data_json", defaultValue="{}", type=str) # Load as JSON string
-        try:
-            loaded_rules = json.loads(rules_json)
-            if not isinstance(loaded_rules, dict):
-                print("[Settings] Warning: Loaded rules data is not a dictionary. Resetting.")
+        child_groups = settings.childGroups()
+        loaded_rules = {}
+        if child_groups:
+            for group in child_groups:
+                settings.beginGroup(group)
+                rule = {}
+                for k in settings.childKeys():
+                    rule[k] = settings.value(k, type=str)
+                if 'id' in rule:
+                    rule['id'] = str(rule['id'])
+                loaded_rules[rule.get('id', group)] = rule
+                settings.endGroup()
+        else:
+            rules_json = settings.value("data_json", defaultValue="{}", type=str)
+            try:
+                loaded_rules = json.loads(rules_json)
+                if not isinstance(loaded_rules, dict):
+                    print("[Settings] Warning: Loaded rules data is not a dictionary. Resetting.")
+                    loaded_rules = {}
+            except json.JSONDecodeError:
+                print("[Settings] Warning: Failed to decode rules JSON. Resetting rules.")
                 loaded_rules = {}
-        except json.JSONDecodeError:
-            print("[Settings] Warning: Failed to decode rules JSON. Resetting rules.")
-            loaded_rules = {}
         settings.endGroup()
 
         # --- > Process and Validate Rules < ---
         self.rules = {}
-        if self._current_active_profile_id: # Only process rules if a profile exists
-             for rule_id, rule_data in loaded_rules.items():
-                  rule_profile_id = rule_data.get("profile_id")
-                  # Assign rules with missing/invalid profile ID to the current active profile
-                  if rule_profile_id is None or rule_profile_id not in self.profiles:
-                       print(f"[Settings] Rule '{rule_id}' ({rule_data.get('domain')}) has invalid/missing profile ID '{rule_profile_id}'. Assigning to active profile '{self._current_active_profile_id}'.")
-                       rule_data["profile_id"] = self._current_active_profile_id
-                  # Ensure 'enabled' field exists
-                  if "enabled" not in rule_data:
-                       rule_data["enabled"] = True # Default to enabled
-                  self.rules[rule_id] = rule_data
+        if self._current_active_profile_id:
+            for rule_id, rule_data in loaded_rules.items():
+                rule_profile_id = rule_data.get("profile_id")
+                if rule_profile_id is None or rule_profile_id not in self.profiles:
+                    print(f"[Settings] Rule '{rule_id}' ({rule_data.get('domain')}) has invalid/missing profile ID '{rule_profile_id}'. Assigning to active profile '{self._current_active_profile_id}'.")
+                    rule_data["profile_id"] = self._current_active_profile_id
+                if "enabled" not in rule_data:
+                    rule_data["enabled"] = True
+                self.rules[rule_id] = rule_data
         else:
             print("[Settings] Warning: No active profile ID available, cannot load/assign rules.")
 
-
-        # Load Hotkeys
-        toggle_seq_str = settings.value("hotkeys/toggle_proxy", defaultValue="", type=str)
-        show_hide_seq_str = settings.value("hotkeys/show_hide_window", defaultValue="", type=str)
-        next_prof_seq_str = settings.value("hotkeys/next_profile", defaultValue="", type=str)
-        prev_prof_seq_str = settings.value("hotkeys/prev_profile", defaultValue="", type=str)
-        quick_add_seq_str = settings.value("hotkeys/quick_add_rule", defaultValue="", type=str)
+        # --- Load Hotkeys (support new and old format) ---
+        settings.beginGroup("hotkeys")
+        toggle_seq_str = settings.value("toggle_engine", defaultValue="", type=str)
+        show_hide_seq_str = settings.value("show_hide_window", defaultValue="", type=str)
+        next_prof_seq_str = settings.value("next_profile", defaultValue="", type=str)
+        prev_prof_seq_str = settings.value("prev_profile", defaultValue="", type=str)
+        quick_add_seq_str = settings.value("quick_add_rule", defaultValue="", type=str)
+        settings.endGroup()
+        # Fallback to old keys if new ones are empty
+        if not toggle_seq_str:
+            toggle_seq_str = settings.value("hotkeys/toggle_proxy", defaultValue="", type=str)
+        if not show_hide_seq_str:
+            show_hide_seq_str = settings.value("hotkeys/show_hide_window", defaultValue="", type=str)
+        if not next_prof_seq_str:
+            next_prof_seq_str = settings.value("hotkeys/next_profile", defaultValue="", type=str)
+        if not prev_prof_seq_str:
+            prev_prof_seq_str = settings.value("hotkeys/prev_profile", defaultValue="", type=str)
+        if not quick_add_seq_str:
+            quick_add_seq_str = settings.value("hotkeys/quick_add_rule", defaultValue="", type=str)
 
         self.toggle_hotkey_edit.setKeySequence(QKeySequence.fromString(toggle_seq_str))
         self.show_hide_hotkey_edit.setKeySequence(QKeySequence.fromString(show_hide_seq_str))
@@ -1271,6 +1327,30 @@ class MainWindow(QMainWindow):
         self._update_profile_selectors() # Refresh profile UI elements
         self._update_rules_title_label() # Update rules title with active profile
 
+        # --- Ensure requires_auth is always a bool for proxies (fixes UI crash) ---
+        for proxy in self.proxies.values():
+            if 'requires_auth' in proxy:
+                v = proxy['requires_auth']
+                if isinstance(v, bool):
+                    continue
+                if isinstance(v, str):
+                    proxy['requires_auth'] = v.lower() in ('true', '1', 'yes')
+                else:
+                    proxy['requires_auth'] = bool(v)
+        # --- End patch ---
+
+        # --- Ensure enabled is always a bool for rules (fixes UI crash) ---
+        for rule in self.rules.values():
+            if 'enabled' in rule:
+                v = rule['enabled']
+                if isinstance(v, bool):
+                    continue
+                if isinstance(v, str):
+                    rule['enabled'] = v.lower() in ('true', '1', 'yes')
+                else:
+                    rule['enabled'] = bool(v)
+        # --- End patch ---
+
         return True
 
     def save_settings(self):
@@ -1291,51 +1371,68 @@ class MainWindow(QMainWindow):
         # Save Last View (Index might have changed)
         settings.setValue("ui/last_view_index", self.main_content_area.currentIndex())
 
-        # --- Save Profiles ---
+        # --- Save Profiles (Human-friendly, sorted) ---
         settings.beginGroup("profiles")
-        profiles_json = json.dumps(self.profiles, indent=4) # Serialize to JSON string
-        settings.setValue("data_json", profiles_json)       # Save the JSON string
+        # Remove old keys
+        for key in settings.childGroups():
+            settings.remove(key)
+        # Sort profiles by name
+        sorted_profiles = sorted(self.profiles.values(), key=lambda p: p.get('name', '').lower())
+        for profile in sorted_profiles:
+            group_name = f"profile:{profile.get('name', profile.get('id', 'Unknown'))}"
+            settings.beginGroup(group_name)
+            for k, v in profile.items():
+                settings.setValue(k, v)
+            settings.endGroup()
         settings.endGroup()
 
         # Save Active Profile ID
-        # Ensure we save a valid ID
         if self._current_active_profile_id and self._current_active_profile_id in self.profiles:
-             settings.setValue("ui/active_profile_id", self._current_active_profile_id)
+            settings.setValue("ui/active_profile_id", self._current_active_profile_id)
         elif self.profiles:
-             # If current ID became invalid somehow, save the first available one
-             first_profile_id = next(iter(self.profiles.keys()), None)
-             settings.setValue("ui/active_profile_id", first_profile_id)
-             print(f"[Settings] Warning: Saving fallback active profile ID: {first_profile_id}")
+            first_profile_id = next(iter(self.profiles.keys()), None)
+            settings.setValue("ui/active_profile_id", first_profile_id)
+            print(f"[Settings] Warning: Saving fallback active profile ID: {first_profile_id}")
         else:
-             settings.remove("ui/active_profile_id") # Remove if no profiles exist
-             print("[Settings] Warning: No profiles exist, clearing active profile ID.")
+            settings.remove("ui/active_profile_id")
+            print("[Settings] Warning: No profiles exist, clearing active profile ID.")
 
-
-        # --- Save Proxies ---
+        # --- Save Proxies (Human-friendly, sorted) ---
         settings.beginGroup("proxies")
-        proxies_json = json.dumps(self.proxies, indent=4) # Serialize to JSON string
-        settings.setValue("data_json", proxies_json)        # Save the JSON string
+        for key in settings.childGroups():
+            settings.remove(key)
+        sorted_proxies = sorted(self.proxies.values(), key=lambda p: p.get('name', '').lower())
+        for proxy in sorted_proxies:
+            group_name = f"proxy:{proxy.get('name', proxy.get('id', 'Unknown'))}"
+            settings.beginGroup(group_name)
+            for k, v in proxy.items():
+                settings.setValue(k, v)
+            settings.endGroup()
         settings.endGroup()
 
-        # --- Save Rules ---
+        # --- Save Rules (Human-friendly, sorted) ---
         settings.beginGroup("rules")
-        # Ensure all saved rules have a valid profile_id (should be handled on load/save)
-        valid_rules_to_save = {
-             rule_id: rule_data for rule_id, rule_data in self.rules.items()
-             if rule_data.get("profile_id") in self.profiles
-        }
-        rules_json = json.dumps(valid_rules_to_save, indent=4) # Serialize to JSON string
-        settings.setValue("data_json", rules_json)            # Save the JSON string
+        for key in settings.childGroups():
+            settings.remove(key)
+        # Only save rules with valid profile_id
+        valid_rules_to_save = [r for r in self.rules.values() if r.get("profile_id") in self.profiles]
+        sorted_rules = sorted(valid_rules_to_save, key=lambda r: r.get('domain', '').lower())
+        for rule in sorted_rules:
+            group_name = f"rule:{rule.get('domain', rule.get('id', 'Unknown'))}"
+            settings.beginGroup(group_name)
+            for k, v in rule.items():
+                settings.setValue(k, v)
+            settings.endGroup()
         settings.endGroup()
 
-        # --- Save Hotkeys Preferences ---
-        # We save the QKeySequence string as before for persistence
-        settings.setValue("hotkeys/toggle_proxy", self.toggle_hotkey_edit.keySequence().toString(QKeySequence.SequenceFormat.NativeText))
-        settings.setValue("hotkeys/show_hide_window", self.show_hide_hotkey_edit.keySequence().toString(QKeySequence.SequenceFormat.NativeText))
-        settings.setValue("hotkeys/next_profile", self.next_profile_hotkey_edit.keySequence().toString(QKeySequence.SequenceFormat.NativeText))
-        settings.setValue("hotkeys/prev_profile", self.prev_profile_hotkey_edit.keySequence().toString(QKeySequence.SequenceFormat.NativeText))
-        settings.setValue("hotkeys/quick_add_rule", self.quick_add_rule_hotkey_edit.keySequence().toString(QKeySequence.SequenceFormat.NativeText))
-        # --- The actual registration happens via _load_and_register_hotkeys ---
+        # --- Save Hotkeys (Human-friendly) ---
+        settings.beginGroup("hotkeys")
+        settings.setValue("toggle_engine", self.toggle_hotkey_edit.keySequence().toString(QKeySequence.SequenceFormat.NativeText))
+        settings.setValue("show_hide_window", self.show_hide_hotkey_edit.keySequence().toString(QKeySequence.SequenceFormat.NativeText))
+        settings.setValue("next_profile", self.next_profile_hotkey_edit.keySequence().toString(QKeySequence.SequenceFormat.NativeText))
+        settings.setValue("prev_profile", self.prev_profile_hotkey_edit.keySequence().toString(QKeySequence.SequenceFormat.NativeText))
+        settings.setValue("quick_add_rule", self.quick_add_rule_hotkey_edit.keySequence().toString(QKeySequence.SequenceFormat.NativeText))
+        settings.endGroup()
 
         # Save Startup Setting
         settings.setValue("app/start_engine_on_startup", self.start_engine_checkbox.isChecked())
@@ -1707,9 +1804,9 @@ class MainWindow(QMainWindow):
         # Always clear the reference
         self.rule_editor_animation = None
 
-    def _save_rule_entry(self, domains: list, proxy_id: str, profile_id: str):
-        """Handles saving a new or edited rule entry."""
-        print(f"[Rule Edit Save] Received save request: Domains={domains}, Proxy={proxy_id}, Profile={profile_id}")
+    def _save_rule_entry(self, domain_port_tuples: list, proxy_id: str, profile_id: str):
+        """Handles saving a new or edited rule entry, with port/port range support."""
+        print(f"[Rule Edit Save] Received save request: {domain_port_tuples}, Proxy={proxy_id}, Profile={profile_id}")
 
         if not profile_id:
              QMessageBox.warning(self, "Save Error", "Cannot save rule: Profile ID is missing.")
@@ -1723,23 +1820,22 @@ class MainWindow(QMainWindow):
             if rule_id not in self.rules:
                  QMessageBox.critical(self, "Error", f"Cannot save: Rule ID '{rule_id}' not found in internal data.")
                  return
-            if len(domains) != 1:
-                 # This should be caught by the editor validation, but double-check
+            if len(domain_port_tuples) != 1:
                  QMessageBox.warning(self, "Save Error", "Cannot edit multiple domains. Please provide only one.")
                  return
-
-            # Update existing rule (ensure 'enabled' state is preserved)
-            self.rules[rule_id]['domain'] = domains[0] # Update domain
+            domain, port = domain_port_tuples[0]
+            self.rules[rule_id]['domain'] = domain
             self.rules[rule_id]['proxy_id'] = proxy_id
             self.rules[rule_id]['profile_id'] = profile_id
-            print(f"[Rules] Updated rule ID {rule_id}: Domain='{domains[0]}', Proxy='{proxy_id}', Profile='{profile_id}'")
+            if port:
+                self.rules[rule_id]['port'] = port
+            elif 'port' in self.rules[rule_id]:
+                del self.rules[rule_id]['port']
+            print(f"[Rules] Updated rule ID {rule_id}: Domain='{domain}', Proxy='{proxy_id}', Profile='{profile_id}', Port={port}")
             rule_id_to_select = rule_id
-
         else:
-            # Add new rules (one for each domain)
             new_rule_ids = []
-            for domain in domains:
-                 # Check if rule already exists for this domain and profile
+            for domain, port in domain_port_tuples:
                  existing_id = self._find_rule_by_domain_and_profile(domain, profile_id)
                  if existing_id:
                       reply = QMessageBox.question(self, "Duplicate Rule",
@@ -1747,65 +1843,51 @@ class MainWindow(QMainWindow):
                                                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                                                 QMessageBox.StandardButton.No)
                       if reply == QMessageBox.StandardButton.Yes:
-                           # Overwrite existing rule
                            self.rules[existing_id]['proxy_id'] = proxy_id
-                           # Ensure 'enabled' state is preserved (it's already in self.rules[existing_id])
+                           if port:
+                               self.rules[existing_id]['port'] = port
+                           elif 'port' in self.rules[existing_id]:
+                               del self.rules[existing_id]['port']
                            print(f"[Rules] Overwrote rule ID {existing_id} for domain '{domain}'.")
-                           if rule_id_to_select is None: # Select the first overwritten/new rule
+                           if rule_id_to_select is None:
                                 rule_id_to_select = existing_id
                       else:
                            print(f"[Rules] Skipped adding duplicate rule for domain '{domain}'.")
-                           continue # Skip to next domain
+                           continue
                  else:
-                      # Create new rule
                       new_id = str(uuid.uuid4())
-                      self.rules[new_id] = {
+                      rule = {
                           "id": new_id,
                           "domain": domain,
                           "proxy_id": proxy_id,
                           "profile_id": profile_id,
-                          "enabled": True # New rules default to enabled
+                          "enabled": True
                       }
-                      print(f"[Rules] Added new rule ID {new_id} for domain '{domain}'.")
-                      if rule_id_to_select is None: # Select the first new rule added
+                      if port:
+                          rule["port"] = port
+                      self.rules[new_id] = rule
+                      print(f"[Rules] Added new rule ID {new_id} for domain '{domain}', Port={port}.")
+                      if rule_id_to_select is None:
                            rule_id_to_select = new_id
-
-        # --- Refined Save Process ---
-        # Use a nested function to manage the UI updates sequentially
-
         def complete_save_process():
-            # 1. Rebuild the list widget with updated data
             print("[Save Rule] Rebuilding rule list...")
-            self._rebuild_rule_list_safely() # This calls _populate_rule_list and updates count
-
-            # 2. Schedule scroll to the new/edited item (if applicable)
+            self._rebuild_rule_list_safely()
             if rule_id_to_select:
                 print(f"[Save Rule] Scheduling scroll to rule ID: {rule_id_to_select}")
                 self._safely_scroll_to_rule(rule_id_to_select)
-
-            # 3. Close editor *after* list is rebuilt and scroll is scheduled
-            #    Use animate=False for immediate closure without animation overlap
             print("[Save Rule] Closing rule editor...")
-            if self.rule_edit_widget: # Check if it still exists
+            if self.rule_edit_widget:
                  self._cancel_rule_edit(animate=False)
             else:
                  print("[Save Rule] Editor already closed/None.")
-
-            # 4. Save settings to persist changes
             print("[Save Rule] Saving settings...")
             self.save_settings()
-
-            # 5. Show status message
             action = "Updated" if editing_existing else "Added"
-            domain_text = domains[0] if len(domains) == 1 else f"{len(domains)} domains"
+            domain_text = domain_port_tuples[0][0] if len(domain_port_tuples) == 1 else f"{len(domain_port_tuples)} domains"
             self.show_status_message(f"Rule(s) {action}: {domain_text}", 3000)
-            
-            # 6. Re-enable the add rule button
             if hasattr(self, 'add_rule_button'):
                 self.add_rule_button.setEnabled(True)
                 print("[Save Rule] Re-enabled Add Rule button.")
-
-        # Execute the process (can be direct call now, was for potential delay)
         complete_save_process()
 
     def _safely_scroll_to_rule(self, rule_id):
@@ -2237,9 +2319,10 @@ class MainWindow(QMainWindow):
                 widget_to_remove.deleteLater()
             del self.proxies[proxy_id]
             print(f"Deleted proxy: {proxy_name} (ID: {proxy_id})")
-            self.rule_edit_widget.update_proxies(self.proxies)
+            if self.rule_edit_widget is not None:
+                self.rule_edit_widget.update_proxies(self.proxies)
             self._update_rule_widgets_proxy_names()
-            self.proxy_engine.update_config(self.get_active_rules(), self.proxies, self.engine_active_profile_id)
+            self.proxy_engine.update_config(self.rules, self.proxies, self._current_active_profile_id)
             self.save_settings()
         else:
              print(f"Error: Cannot delete proxy with unknown ID: {proxy_id}")
@@ -2258,7 +2341,11 @@ class MainWindow(QMainWindow):
         item_widget = ProxyItemWidget(proxy_data, parent=self, theme_name=self.current_theme)
         item_widget.edit_requested.connect(self._show_edit_proxy_editor)
         item_widget.delete_requested.connect(self._delete_proxy_entry)
-        item_widget.test_requested.connect(self.proxy_engine.test_proxy)
+        # --- Patch: Ensure engine config is up-to-date before testing ---
+        def _safe_test_proxy(proxy_id):
+            self.proxy_engine.update_config(self.rules, self.proxies, self._current_active_profile_id)
+            self.proxy_engine.test_proxy(proxy_id)
+        item_widget.test_requested.connect(_safe_test_proxy)
         item_widget.name_label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
         item_widget.details_label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
         # <<< CHANGE HERE: Insert new widgets at the top (index 0) >>>
@@ -2812,6 +2899,7 @@ class MainWindow(QMainWindow):
                 self.profiles[profile_id]['name'] = new_name
                 print(f"Renamed profile ID {profile_id} to '{new_name}'")
                 self._update_profile_selectors() # This will re-select the current item
+                self._update_rule_widgets_proxy_names()  # <-- Add this line to update rule widgets with new profile names
                 self.save_settings()
 
     def _delete_profile(self):
@@ -2866,6 +2954,7 @@ class MainWindow(QMainWindow):
 
             # Update UI
             self._update_profile_selectors() # Update combo box content
+            self._populate_rule_list()       # <-- Add this to refresh rule widgets and counts
 
             # Persist
             self.save_settings()
@@ -2912,13 +3001,16 @@ class MainWindow(QMainWindow):
         # Add a count label if requested
         if include_count_label:
             # Create a label to show count (will be populated elsewhere)
-            count_label = QLabel("0 rules")
+            count_label = QLabel("0")
             count_label.setObjectName("CountLabel")
             count_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             count_label.setContentsMargins(0, 0, 0, 0)
             filter_layout.addWidget(count_label)
-            # Store this so it can be updated from _update_rule_count_label
-            self.rules_count_label = count_label
+            # Store this so it can be updated from the appropriate update method
+            if placeholder_text.lower().startswith("filter rules"):
+                self.rules_count_label = count_label
+            else:
+                self.proxies_count_label = count_label
         
         return filter_widget
 
@@ -3071,7 +3163,9 @@ class MainWindow(QMainWindow):
             if proxy_widget.isVisible():
                 visible_count += 1
                 
-        self.proxies_count_label.setText(f"({visible_count} Visible)")
+        # Also show total count of proxies for clarity
+        total_count = len(self.proxies)
+        self.proxies_count_label.setText(f"{total_count} proxy{'ies' if total_count != 1 else ''}")
 
     def closeEvent(self, event):
         """Handle window close event (X button) based on setting."""
@@ -3727,3 +3821,17 @@ class MainWindow(QMainWindow):
         sb.setValue(sb.maximum())
 
     # ... (rest of MainWindow methods) ...
+
+    def _handle_engine_status_for_log_timer(self, status):
+        """Start/stop log auto-clear timer based on engine status."""
+        if status == "active":
+            if not self._log_auto_clear_timer.isActive():
+                self._log_auto_clear_timer.start()
+        else:
+            if self._log_auto_clear_timer.isActive():
+                self._log_auto_clear_timer.stop()
+
+    def _auto_clear_logs_if_engine_running(self):
+        """Clear logs if the engine is running (called by timer)."""
+        if self.proxy_engine.is_active:
+            self.log_text_edit.clear()

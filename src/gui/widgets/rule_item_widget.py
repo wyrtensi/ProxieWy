@@ -165,12 +165,14 @@ class RuleItemWidget(QFrame):
         self.domain = rule_data.get("domain", self.domain) # Update domain/IP field
         self.proxy_id = rule_data.get("proxy_id")
         self.profile_id = rule_data.get("profile_id") # Update profile ID
-        self.proxy_name_map = proxy_name_map
-        self.profile_name_map = profile_name_map # Update profile map
         enabled = rule_data.get("enabled", True) # Default to enabled
+        port = rule_data.get("port") if "port" in rule_data else None
 
-        self.domain_label.setText(f"<b>{self.domain}</b>") # Display the domain or IP
-        self.domain_label.setToolTip(self.domain) # Tooltip shows the full value
+        domain_display = self.domain
+        if port is not None and str(port).strip() != "":
+            domain_display = f"{self.domain}:{port}"
+        self.domain_label.setText(f"<b>{domain_display}</b>")
+        self.domain_label.setToolTip(domain_display)
 
         label_alpha = 60 # Keep background transparency
 
@@ -187,10 +189,12 @@ class RuleItemWidget(QFrame):
         # --- Update Proxy Label ---
         proxy_display_name = "Direct Connection"
         proxy_bg_color = generate_color_from_id(self.proxy_id, saturation=0.6, lightness=0.45)
-        if self.proxy_id and self.proxy_id in self.proxy_name_map:
+        if self.proxy_id == "__BLOCK__":
+            proxy_display_name = "Block Connection"
+        elif self.proxy_id and self.proxy_id in self.proxy_name_map:
             proxy_display_name = self.proxy_name_map[self.proxy_id]
         elif self.proxy_id:
-             proxy_display_name = f"Proxy ID: {self.proxy_id[:6]}... (Not Found)"
+            proxy_display_name = f"Proxy ID: {self.proxy_id[:6]}... (Not Found)"
         self.proxy_label.setText(f"→ {proxy_display_name}")
         proxy_bg_color.setAlpha(label_alpha)
         # Apply style to proxy label with fixed opaque text color

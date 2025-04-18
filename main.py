@@ -29,7 +29,7 @@ def resource_path_main(relative_path):
 
 # --- Constants ---
 APP_NAME = "ProxieWy"
-APP_VERSION = "1.1.1"
+APP_VERSION = "1.1.3"
 DEVELOPER_NAME = "wyrtensi"
 ORGANIZATION_NAME = "wyrtensi" # For QSettings
 # Use relative paths for constants

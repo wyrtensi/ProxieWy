@@ -295,7 +295,11 @@ QComboBox::drop-down {
     border-bottom-right-radius: 3px;
 }
 QComboBox::down-arrow {
-     /* image: url(path/to/light-chevron-down.svg); */
+    image: url(src/assets/icons/chevron_down_light.svg); /* Dark chevron for light theme */
+    width: 18px;
+    height: 18px;
+    margin-right: 4px;
+    /* No background, icon only */
 }
 QComboBox QAbstractItemView { /* The popup list */
     background-color: #ffffff;
@@ -338,6 +342,8 @@ QFrame#RuleItemWidget {
     border-radius: 8px;
     border: 1px solid #dee2e6;
     margin-bottom: 6px;
+    margin-left: 7px;
+    margin-right: 7px;
     padding: 5px;
 }
 QFrame#RuleItemWidget:hover {
@@ -445,10 +451,16 @@ QWidget QLineEdit:focus {
 
 /* Count label in filter bar */
 QLabel#CountLabel {
-    color: #6c757d;
+    color: #1c1c1c;
+    background-color: #e0e0e0;
+    border-radius: 10px;
+    padding: 2px 12px;
     font-size: 13px;
-    padding-left: 10px;
-    min-width: 70px;
+    min-width: 38px;
+    border: 1px solid #c5c5c5;
+    font-weight: bold;
+    qproperty-alignment: AlignCenter;
+    /* Looks like a badge */
 }
 
 /* Add styles for other widgets as needed */
@@ -590,4 +602,30 @@ QTextEdit#LogTextEdit:focus {
     background-color: #slightly-different-than-page-bg;
 }
 */
+
+QFrame#ProxyItemFrame {
+    margin-bottom: 3px; /* Reduced to match rules visually in scroll area */
+    margin-top: 0;      /* Ensure no extra gap above first item */
+}
+
+QWidget#StatusBar QLabel#CountLabel {
+    color: #aaa;
+    background-color: #f4f4f4;
+    border: 1px solid #ddd;
+    font-weight: normal;
+    opacity: 0.85;
+}
+
+/* Version container styling */
+QWidget#VersionContainer {
+    background-color: transparent;
+    border-radius: 5px;
+}
+
+QWidget#VersionContainer QLabel#CountLabel {
+    background-color: transparent;
+    border: none;
+    color: #888;
+    font-size: 11px;
+}
 

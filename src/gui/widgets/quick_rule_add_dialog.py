@@ -15,8 +15,8 @@ import ipaddress # For IP validation
 
 class QuickRuleAddDialog(QDialog):
     """A compact dialog to quickly add a domain routing rule."""
-    # Signal: Emits (domain_str, proxy_id_or_none, profile_id_or_none)
-    save_rule = Signal(str, object, str)
+    # Signal: Emits (domain_str, proxy_id_or_none, profile_id_or_none, port)
+    save_rule = Signal(str, object, str, int)
 
     def __init__(self, main_window_ref, available_proxies: dict, available_profiles: dict, initial_domain: str = "", parent=None):
         super().__init__(parent)
@@ -54,6 +54,20 @@ class QuickRuleAddDialog(QDialog):
         domain_layout.addWidget(domain_label)
         domain_layout.addWidget(self.domain_input)
         main_layout.addLayout(domain_layout)
+
+        # Port input (only for IPs)
+        port_layout = QHBoxLayout()
+        self.port_label = QLabel("Port (optional, for IP only):")
+        self.port_label.setFixedWidth(60)
+        self.port_input = QLineEdit()
+        self.port_input.setPlaceholderText("Leave blank to match all ports")
+        self.port_input.setMaximumWidth(120)
+        port_layout.addWidget(self.port_label)
+        port_layout.addWidget(self.port_input)
+        main_layout.addLayout(port_layout)
+        self.port_label.hide()
+        self.port_input.hide()
+        self.domain_input.textChanged.connect(self._on_domain_text_changed)
 
         # Proxy Selection
         proxy_layout = QHBoxLayout()
@@ -161,6 +175,25 @@ class QuickRuleAddDialog(QDialog):
             return False
         return bool(re.match(pattern, value, re.IGNORECASE))
 
+    def _on_domain_text_changed(self):
+        """Show/hide port input based on whether the entry is an IP."""
+        entry = self.domain_input.text().strip()
+        # Remove protocol, path, port
+        if entry.startswith("http://"): entry = entry[7:]
+        if entry.startswith("https://"): entry = entry[8:]
+        entry = entry.split('/')[0].split(':')[0]
+        is_ip = False
+        try:
+            ipaddress.ip_address(entry)
+            is_ip = True
+        except Exception:
+            is_ip = False
+        self.port_label.setVisible(is_ip)
+        self.port_input.setVisible(is_ip)
+        self.port_input.setEnabled(is_ip)
+        if not is_ip:
+            self.port_input.clear()
+
     def _on_save(self):
         """Validate input and emit signal if valid."""
         entry_raw = self.domain_input.text().strip()
@@ -172,6 +205,17 @@ class QuickRuleAddDialog(QDialog):
         entry_raw = entry_raw.split('/')[0]
         # Remove port number
         entry = entry_raw.split(':')[0].lower() # Use lower case
+        port_text = self.port_input.text().strip()
+        port = None
+        if port_text:
+            try:
+                port = int(port_text)
+                if not (1 <= port <= 65535):
+                    raise ValueError()
+            except Exception:
+                QMessageBox.warning(self, "Input Error", "Port must be a number between 1 and 65535, or blank.")
+                self.port_input.setFocus()
+                return
 
         # ---> Use updated validation <---
         if not self._is_valid_domain_or_ip(entry):
@@ -191,8 +235,8 @@ class QuickRuleAddDialog(QDialog):
 
         # Emit the data
         # ---> Update print statement <---
-        print(f"[Quick Add] Emitting save: Entry='{entry}', Proxy='{selected_proxy_id}', Profile='{selected_profile_id}'")
-        self.save_rule.emit(entry, selected_proxy_id, selected_profile_id)
+        print(f"[Quick Add] Emitting save: Entry='{entry}', Proxy='{selected_proxy_id}', Profile='{selected_profile_id}', Port={port}")
+        self.save_rule.emit(entry, selected_proxy_id, selected_profile_id, port)
         self.accept() # Close the dialog successfully
 
     @staticmethod

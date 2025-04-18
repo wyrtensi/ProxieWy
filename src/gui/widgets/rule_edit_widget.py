@@ -9,7 +9,7 @@ import ipaddress # For IP validation
 class RuleEditWidget(QFrame):
     """Widget for adding or editing domain routing rules."""
     # Change signal back
-    save_rules = Signal(list, str, str) # domains_list, proxy_id, profile_id
+    save_rules = Signal(list, str, str, int) # domains_list, proxy_id, profile_id, port
     cancelled = Signal()
 
     # Add profile_map parameter
@@ -47,13 +47,21 @@ class RuleEditWidget(QFrame):
         # Domain (Revert to QTextEdit for bulk add)
         domains_label = QLabel("Domain/IP(s):") # Changed label
         self.domain_input = QTextEdit()
-        self.domain_input.setPlaceholderText("Enter domains or IP addresses, one per line\n(e.g., example.com, *.example.net, 192.168.1.100)\n(Note: Editing affects first entry only)") # Update placeholder
+        self.domain_input.setPlaceholderText(
+            "Enter domains or IP addresses, one per line.\n"
+            "Examples:\n"
+            "  example.com\n"
+            "  *.example.net\n"
+            "  1.2.3.4:443   (single port)\n"
+            "  1.2.3.4:443-500   (port range)\n"
+            "  1.2.3.4   (all ports)\n"
+            "(Note: Editing affects first entry only)"
+        )
         self.domain_input.setAcceptRichText(False)
         self.domain_input.setMinimumHeight(80) # Allow space for multiple lines
         form_layout.addWidget(domains_label)
         form_layout.addWidget(self.domain_input)
-        # Remove previous QLineEdit layout
-
+        
         # Proxy Selection
         proxy_layout = QHBoxLayout()
         proxy_label = QLabel("Forward via:")
@@ -128,7 +136,7 @@ class RuleEditWidget(QFrame):
         return bool(re.match(pattern, value, re.IGNORECASE)) # Ignore case for matching
 
     def _on_save(self):
-        """Validate input and emit save signal with list of domains/IPs."""
+        """Validate input and emit save signal with list of domains/IPs and port/port range."""
         domains_text = self.domain_input.toPlainText().strip()
         selected_proxy_index = self.proxy_combo.currentIndex()
         selected_proxy_id = self.proxy_combo.itemData(selected_proxy_index)
@@ -141,50 +149,70 @@ class RuleEditWidget(QFrame):
             return
 
         # Split by comma, space, newline, semicolon and filter empty strings
-        raw_entries = [d.strip() for d in re.split(r'[,\s\n;]+', domains_text) if d.strip()]
-
+        raw_entries = [d.strip() for d in re.split(r'[\,\s\n;]+', domains_text) if d.strip()]
         valid_entries = []
         invalid_entries = []
-
-        # Validate and filter entries
         for entry in raw_entries:
             # Basic cleanup: remove http(s):// prefix if present
             if entry.startswith("http://"): entry = entry[7:]
             if entry.startswith("https://"): entry = entry[8:]
             # Remove trailing slashes or paths
             entry = entry.split('/')[0]
-            # Remove port if present (common when copying from browser)
-            entry = entry.split(':')[0]
-
-            if self._is_valid_domain_or_ip(entry):
-                # Add entry in lowercase to avoid case sensitivity issues later
-                # IP addresses are case-insensitive anyway
-                entry_lower = entry.lower()
-                if entry_lower not in valid_entries:
-                    valid_entries.append(entry_lower)
+            # Parse IP:port or IP:port-range
+            domain_part = entry
+            port_part = None
+            if ':' in entry:
+                domain_part, port_part = entry.split(':', 1)
+            # Validate domain or IP
+            if self._is_valid_domain_or_ip(domain_part):
+                # Validate port/port range if present
+                if port_part:
+                    if '-' in port_part:
+                        # Port range: e.g., 443-500
+                        try:
+                            start, end = port_part.split('-', 1)
+                            start = int(start)
+                            end = int(end)
+                            # Ensure valid port range
+                            if not (1 <= start <= 65535 and 1 <= end <= 65535 and start <= end):
+                                raise ValueError()
+                        except Exception:
+                            # Invalid port range
+                            invalid_entries.append(entry)
+                            continue
+                    else:
+                        # Single port: e.g., 443
+                        try:
+                            port_val = int(port_part)
+                            if not (1 <= port_val <= 65535):
+                                raise ValueError()
+                        except Exception:
+                            # Invalid single port
+                            invalid_entries.append(entry)
+                            continue
+                # Add entry as (domain, port/port_range) tuple
+                valid_entries.append((domain_part.lower(), port_part))
             else:
-                invalid_entries.append(entry) # Show original invalid input
-
+                # Invalid domain or IP
+                invalid_entries.append(entry)
         if invalid_entries:
-             error_msg = f"Invalid domain or IP format for:\n - " + "\n - ".join(invalid_entries)
-             QMessageBox.warning(self, "Input Error", error_msg)
-             self.domain_input.setFocus()
-             return
+            error_msg = f"Invalid domain, IP, or port format for:\n - " + "\n - ".join(invalid_entries)
+            QMessageBox.warning(self, "Input Error", error_msg)
+            self.domain_input.setFocus()
+            return
         if not valid_entries:
             # This might happen if only invalid entries were entered
             QMessageBox.warning(self, "Input Error", "No valid domains or IP addresses entered after cleanup.")
             self.domain_input.setFocus()
             return
-
-        # If editing, only allow saving if exactly one entry is present
         if self._editing_rule_id and len(valid_entries) > 1:
-             QMessageBox.warning(self, "Input Error", "Cannot edit multiple domains/IPs at once. Please enter only one entry when editing.")
-             self.domain_input.setFocus()
-             return
-
-        # Emit signal with list of valid entries, proxy ID, and profile ID
+            # Only allow editing a single rule at a time
+            QMessageBox.warning(self, "Input Error", "Cannot edit multiple domains/IPs at once. Please enter only one entry when editing.")
+            self.domain_input.setFocus()
+            return
+        # Emit signal with list of (domain, port/port_range) tuples, proxy ID, and profile ID
         print(f"[Rule Edit Save] Emitting save_rules with entries: {valid_entries}")
-        self.save_rules.emit(valid_entries, selected_proxy_id, selected_profile_id)
+        self.save_rules.emit(valid_entries, selected_proxy_id, selected_profile_id, None)
 
     def update_proxies(self, available_proxies: dict):
         """Updates the list of proxies in the dropdown."""
@@ -194,10 +222,10 @@ class RuleEditWidget(QFrame):
         self.proxy_combo.blockSignals(True)
         self.proxy_combo.clear()
         self.proxy_combo.addItem("Direct Connection", None)
+        self.proxy_combo.addItem("Block Connection", "__BLOCK__")
         # Sort by proxy name from the data dict
         sorted_proxies = sorted(available_proxies.items(), key=lambda item: item[1].get('name', '').lower())
         for proxy_id, proxy_details in sorted_proxies:
-            # Get name from proxy_details (the dictionary value)
             display_name = proxy_details.get('name', f"Proxy {proxy_id[:6]}...")
             self.proxy_combo.addItem(display_name, proxy_id) # Store ID as user data
         index_to_select = self.proxy_combo.findData(current_data)
@@ -234,12 +262,16 @@ class RuleEditWidget(QFrame):
     def load_data(self, rule_data: dict):
         """Populate fields for editing a single rule."""
         self._editing_rule_id = rule_data.get("id")
-        domain = rule_data.get("domain", "") # Load only the specific domain being edited
+        domain = rule_data.get("domain", "")
         proxy_id = rule_data.get("proxy_id")
-        profile_id = rule_data.get("profile_id") # Should always be a valid ID now
-
-        self.domain_input.setPlainText(domain) # Set text in QTextEdit
-        self.domain_input.setReadOnly(False) # Domain editing is allowed (but save checks for single domain)
+        profile_id = rule_data.get("profile_id")
+        port = rule_data.get("port") if "port" in rule_data else None
+        # Compose entry for editing
+        entry = domain
+        if port:
+            entry = f"{domain}:{port}"
+        self.domain_input.setPlainText(entry)
+        self.domain_input.setReadOnly(False)
 
         # Select Proxy
         proxy_idx = self.proxy_combo.findData(proxy_id)
@@ -255,8 +287,8 @@ class RuleEditWidget(QFrame):
         self._editing_rule_id = None
         self.domain_input.clear()
         self.domain_input.setReadOnly(False)
-        self.proxy_combo.setCurrentIndex(0) # Default to Direct
-        self.profile_combo.setCurrentIndex(0) # Default to first profile
+        self.proxy_combo.setCurrentIndex(0)
+        self.profile_combo.setCurrentIndex(0)
 
     def set_focus_on_domains(self):
         """Set focus to the domains input field."""

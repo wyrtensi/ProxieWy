@@ -219,6 +219,8 @@ QFrame#RuleItemWidget { /* Changed from RuleItemFrame */
     border-radius: 8px; /* Slightly rounder */
     border: 1px solid #3a3c5a; /* Slightly lighter border */
     margin-bottom: 6px; /* Spacing */
+    margin-left: 7px;
+    margin-right: 7px;
     padding: 5px; /* Internal padding */
 }
 QFrame#RuleItemWidget:hover {
@@ -352,12 +354,18 @@ QWidget QLineEdit:focus {
     border: 1px solid #80a4ff;
 }
 
-/* Count label in filter bar */
+/* --- Rule Count Badge --- */
 QLabel#CountLabel {
-    color: #a0a0c0;
+    color: #e0e0e0;
+    background-color: #35374e;
+    border-radius: 10px;
+    padding: 2px 12px;
     font-size: 13px;
-    padding-left: 10px;
-    min-width: 70px;
+    min-width: 38px;
+    border: 1px solid #4a4e69;
+    font-weight: bold;
+    qproperty-alignment: AlignCenter;
+    /* Looks like a badge */
 }
 
 /* Proxy/Rule Item */
@@ -366,6 +374,8 @@ QFrame#ProxyItemFrame, QFrame#RuleItemFrame {
     border-radius: 6px;
     border: 1px solid #3a3c54;
     padding: 8px; /* Internal padding */
+    margin-bottom: 3px; /* Reduced to match rules visually in scroll area */
+    margin-top: 0;      /* Ensure no extra gap above first item */
 }
 QFrame#ProxyItemFrame:hover, QFrame#RuleItemFrame:hover {
     background-color: #3a3d58;
@@ -426,7 +436,7 @@ QFrame#ProxyEditFrame QPushButton#CancelButton:hover, QFrame#RuleEditFrame QPush
 
 /* ComboBox Styling */
 QComboBox {
-    background-color: #27293d;
+    background-color: #32324a;
     color: #e0e0e0;
     border: 1px solid #3a3c54;
     border-radius: 4px;
@@ -448,9 +458,11 @@ QComboBox::drop-down {
     border-bottom-right-radius: 3px;
 }
 QComboBox::down-arrow {
-     /* Using a character for simplicity, replace with SVG if preferred */
-     /* image: url(path/to/dark-chevron-down.svg); */
-     /* For character: Use font properties if needed */
+    image: url(src/assets/icons/chevron_down_dark.svg); /* White chevron for dark theme */
+    width: 18px;
+    height: 18px;
+    margin-right: 4px;
+    /* No background, icon only */
 }
 QComboBox QAbstractItemView { /* The popup list */
     background-color: #27293d;
@@ -627,4 +639,39 @@ QTextEdit#LogTextEdit:focus {
     background-color: #slightly-different-than-page-bg;
 }
 */
+
+/* Count label in filter bar */
+QLabel#CountLabel {
+    color: #e0e0e0;
+    background-color: #35374e;
+    border-radius: 10px;
+    padding: 2px 12px;
+    font-size: 13px;
+    min-width: 38px;
+    border: 1px solid #4a4e69;
+    font-weight: bold;
+    qproperty-alignment: AlignCenter;
+    /* Looks like a badge */
+}
+
+QWidget#StatusBar QLabel#CountLabel {
+    color: #888;
+    background-color: #23233a;
+    border: 1px solid #333;
+    font-weight: normal;
+    opacity: 0.85;
+}
+
+/* Version container styling */
+QWidget#VersionContainer {
+    background-color: transparent;
+    border-radius: 5px;
+}
+
+QWidget#VersionContainer QLabel#CountLabel {
+    background-color: transparent;
+    border: none;
+    color: #888;
+    font-size: 11px;
+}
 

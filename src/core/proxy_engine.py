@@ -118,7 +118,13 @@ class ProxyRequestHandler(socketserver.BaseRequestHandler):
             target_proxy_info = None
             # Ensure match is attempted *before* deciding route
             print(f"[Handler {self.client_address}] Attempting rule match for '{target_host}'...")
-            matched_proxy_id, matched_rule_id = self.engine.rule_matcher.match(target_host)
+            matched_proxy_id, matched_rule_id = self.engine.rule_matcher.match(target_host, target_port)
+
+            # --- Block Connection logic ---
+            if matched_proxy_id == "__BLOCK__":
+                print(f"[Handler {self.client_address}] BLOCK rule matched for '{target_host}:{target_port}'. Blocking connection.")
+                self._send_error_response(403, "Blocked by Rule")
+                return
 
             if matched_proxy_id and matched_proxy_id in self.engine._proxies: # Check against engine's proxy list
                 target_proxy_info = self.engine._proxies[matched_proxy_id]

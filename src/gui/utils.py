@@ -6,6 +6,8 @@ import sys
 import os
 import re
 
+CHEVRON_DOWN_ICON_PATH = "src/assets/icons/chevron_down.svg"
+
 def resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
     # Check if running as a PyInstaller bundle
@@ -89,4 +91,10 @@ def create_icon_from_svg_data(svg_data: bytes) -> QIcon:
     if pixmap.isNull():
          print("Warning: Failed to render SVG to pixmap.")
          return QIcon()
-    return QIcon(pixmap) 
+    return QIcon(pixmap)
+
+def load_and_colorize_chevron_svg(color: str) -> bytes:
+    """
+    Loads and colorizes the chevron down SVG icon for combo boxes.
+    """
+    return load_and_colorize_svg_content(CHEVRON_DOWN_ICON_PATH, color) 
